@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Leer el token desde las variables de entorno
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g")
 
 # Diccionario de canales requeridos
 CHANNELS = {
