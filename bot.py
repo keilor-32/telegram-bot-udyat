@@ -1,23 +1,28 @@
 import logging
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import os
 
-TOKEN = os.getenv("8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g")
+# Leer el token desde las variables de entorno
+TOKEN = os.getenv("BOT_TOKEN")
 
+# Diccionario de canales requeridos
 CHANNELS = {
-    'prueba1': '@hsitotv',
-    'prueba2': '@udyat_channel'
+    'HSITOTV': '@hsitotv',
+    'Udyat': '@udyat_channel'
 }
 
+# Configuración de logs
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 
+# Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
-        [InlineKeyboardButton("🔗 Unirse a CHAT", url=f"https://t.me/{CHANNELS['hsitotv'][1:]}")],
-        [InlineKeyboardButton("🔗 Unirse a HSITOTV", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
+        [InlineKeyboardButton("🔗 Unirse a HSITOTV", url=f"https://t.me/{CHANNELS['HSITOTV'][1:]}")],
+        [InlineKeyboardButton("🔗 Unirse a Udyat", url=f"https://t.me/{CHANNELS['Udyat'][1:]}")],
         [InlineKeyboardButton("✅ Verificar suscripción", callback_data='verify')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -27,6 +32,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=reply_markup
     )
 
+# Verificación de membresía
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -38,15 +44,17 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
             if member.status not in ['member', 'administrator', 'creator']:
                 not_joined.append(name)
-        except:
+        except Exception as e:
+            logging.warning(f"Error verificando {username}: {e}")
             not_joined.append(name)
 
     if not not_joined:
         await query.edit_message_text("✅ Verificación completada. ¡Gracias por unirte!")
     else:
-        msg = "❌ Aún no estás suscrito a:" + "\n".join(f"• {c}" for c in not_joined)
+        msg = "❌ Aún no estás suscrito a:\n" + "\n".join(f"• {c}" for c in not_joined)
         await query.edit_message_text(msg)
 
+# Función principal
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
