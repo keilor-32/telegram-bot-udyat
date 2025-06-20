@@ -14,25 +14,26 @@ from telegram.ext import (
 # Cargar variables de entorno
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
-PORT = int(os.getenv('PORT', '10000'))
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+PORT = int(os.getenv('PORT', '8443'))  # puerto para el webhook
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Ej: https://tu-app.onrender.com/
 
-# Canales requeridos para usar el bot
+# Canales requeridos
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
 }
 
+# Base datos temporal
 user_premium = {}
 user_reenvios = {}
 admin_videos = {}
 FREE_LIMIT = 3
 
+# Logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
 
 def get_main_menu():
     return InlineKeyboardMarkup([
@@ -45,7 +46,6 @@ def get_main_menu():
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"/start recibido de user_id={update.effective_user.id}")
     await update.message.reply_text("👋 ¡Hola! Antes de comenzar debes unirte a los canales.")
     keyboard = [
         [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
@@ -56,10 +56,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 Únete a ambos y luego presiona '✅ Verificar suscripción'.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
-# (Aquí sigue todo tu código original, sin cambios...)
-
-# Copia aquí las funciones verify, handle_callback, detectar_admin, bienvenida, activar_premium exactamente igual
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -99,11 +95,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🔙 Volver", callback_data="volver")]
             ])
         )
+
     elif query.data == "comprar":
         await query.message.reply_text(
             "💰 Contacta con @SoporteUdyat para comprar el Plan Premium.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]])
         )
+
     elif query.data.startswith("reenviar_"):
         original_msg_id = int(query.data.split("_")[1])
         user_reenviados = user_reenvios.get(user_id, 0)
@@ -125,6 +123,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]),
                 parse_mode="Markdown"
             )
+
     elif query.data == "perfil":
         await query.message.reply_text(
             f"""🧑 Tu perfil:
@@ -134,10 +133,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Plan: {"Premium" if user_premium.get(user_id, False) else "Free"}""",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]])
         )
+
     elif query.data == "info":
         await query.message.reply_text("ℹ️ Bot para compartir contenido exclusivo.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
+
     elif query.data == "ayuda":
         await query.message.reply_text("❓ Contacta @SoporteUdyat si necesitas ayuda.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
+
     elif query.data == "volver":
         await query.message.reply_text("🔙 Menú principal:", reply_markup=get_main_menu())
 
@@ -179,24 +181,22 @@ async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("premium", activar_premium))
     app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bienvenida))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Entity("url"), detectar_admin))
-
-    logger.info("✅ BOT INICIADO CORRECTAMENTE")
-
+    print("✅ BOT INICIADO CORRECTAMENTE")
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=WEBHOOK_URL,
-        webhook_path="/",
+        path="/",
     )
 
 if __name__ == "__main__":
     main()
+
 
 
