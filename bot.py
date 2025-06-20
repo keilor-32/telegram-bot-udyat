@@ -16,23 +16,20 @@ from telegram.ext import (
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 PORT = int(os.getenv("PORT", "8080"))
-
-# Tu URL de Render (cámbiala por la que te corresponda)
-BASE_URL = "https://telegram-bot-udyat-8.onrender.com"
+WEBHOOK_URL = f"https://telegram-bot-udyat-8.onrender.com/webhook/{TOKEN}"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = f"{BASE_URL}{WEBHOOK_PATH}"
 
-# Configuración básica de logging
+# Logging básico
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 
-# Variables globales
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
 }
+
 user_premium = {}
 user_reenvios = {}
 admin_videos = {}
@@ -175,17 +172,14 @@ async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_premium[user_id] = True
     await update.message.reply_text("✅ Ahora tienes acceso Premium. ¡Disfruta sin límites!")
 
-# Manejador webhook para aiohttp
 async def webhook_handler(request):
     data = await request.json()
     update = Update.de_json(data, app.bot)
     await app.update_queue.put(update)
     return web.Response(text="OK")
 
-# Configurar la aplicación
 app = Application.builder().token(TOKEN).build()
 
-# Añadir handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("premium", activar_premium))
 app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
@@ -210,12 +204,14 @@ def main():
         await site.start()
 
         logging.info("✅ Bot y servidor web corriendo")
-        await app.idle()
+
+        await app.wait_closed()
 
     asyncio.run(run())
 
 if __name__ == "__main__":
     main()
+
 
 
 
