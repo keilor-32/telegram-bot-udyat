@@ -11,29 +11,28 @@ from telegram.ext import (
     filters,
 )
 
-# === CARGAR TOKEN DESDE VARIABLES DE ENTORNO ===
+# Cargar variables de entorno desde .env (solo para pruebas locales)
 load_dotenv()
-TOKEN = os.getenv('TOKEN')  # El token estará en .env o configurado en Render
+TOKEN = os.getenv('TOKEN')
 
-# === CANALES REQUERIDOS PARA USAR EL BOT ===
+if not TOKEN:
+    raise ValueError("❌ TOKEN no definido. Configura la variable de entorno.")
+
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
 }
 
-# === BASE DE DATOS TEMPORAL ===
 user_premium = {}
 user_reenvios = {}
 admin_videos = {}
 FREE_LIMIT = 3
 
-# === LOGGING ===
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# === MENÚ PRINCIPAL ===
 def get_main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
@@ -44,7 +43,6 @@ def get_main_menu():
          InlineKeyboardButton("❓ Ayuda", callback_data="ayuda")]
     ])
 
-# === /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 ¡Hola! Antes de comenzar debes unirte a los canales.")
     keyboard = [
@@ -57,7 +55,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# === VERIFICAR SUSCRIPCIÓN ===
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -79,7 +76,6 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "❌ Aún no estás suscrito a:\n" + "\n".join(f"• {c}" for c in not_joined)
         await query.edit_message_text(msg)
 
-# === CALLBACKS ===
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -145,7 +141,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "volver":
         await query.message.reply_text("🔙 Menú principal:", reply_markup=get_main_menu())
 
-# === DETECTAR VIDEO O LINK DE ADMIN ===
 async def detectar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     chat_id = msg.chat_id
@@ -173,19 +168,18 @@ async def detectar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await msg.reply_text("🔁 Puedes reenviar este contenido (hasta 3 veces si eres Free).", reply_markup=boton)
 
-# === BIENVENIDA ===
 async def bienvenida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for user in update.message.new_chat_members:
         await update.message.reply_text(f"👋 Bienvenido, {user.full_name} al grupo 🎉")
 
-# === /premium ===
 async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_premium[user_id] = True
     await update.message.reply_text("✅ Ahora tienes acceso Premium. ¡Disfruta sin límites!")
 
-# === MAIN ===
 def main():
+    import telegram
+    print("🧪 Versión python-telegram-bot:", telegram.__version__)
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("premium", activar_premium))
