@@ -172,14 +172,17 @@ async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_premium[user_id] = True
     await update.message.reply_text("✅ Ahora tienes acceso Premium. ¡Disfruta sin límites!")
 
+# Manejador webhook para aiohttp
 async def webhook_handler(request):
     data = await request.json()
     update = Update.de_json(data, app.bot)
     await app.update_queue.put(update)
     return web.Response(text="OK")
 
+# Crear aplicación
 app = Application.builder().token(TOKEN).build()
 
+# Añadir handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("premium", activar_premium))
 app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
@@ -205,12 +208,14 @@ def main():
 
         logging.info("✅ Bot y servidor web corriendo")
 
-        await app.wait_closed()
+        # Esperar indefinidamente para mantener el bot vivo
+        await asyncio.Event().wait()
 
     asyncio.run(run())
 
 if __name__ == "__main__":
     main()
+
 
 
 
