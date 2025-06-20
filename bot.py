@@ -16,9 +16,11 @@ from telegram.ext import (
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 PORT = int(os.getenv("PORT", "8080"))
-# Cambia esta URL por la que te da Render para tu servicio, más el path del webhook
-WEBHOOK_URL = f"https://telegram-bot-udyat-8.onrender.com/webhook/{TOKEN}"
+
+# Tu URL de Render (cámbiala por la que te corresponda)
+BASE_URL = "https://telegram-bot-udyat-8.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = f"{BASE_URL}{WEBHOOK_PATH}"
 
 # Configuración básica de logging
 logging.basicConfig(
@@ -26,18 +28,15 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# Variables globales para la lógica del bot
+# Variables globales
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
 }
-
 user_premium = {}
 user_reenvios = {}
 admin_videos = {}
 FREE_LIMIT = 3
-
-# Funciones del bot (start, verify, handle_callback, etc.) 
 
 def get_main_menu():
     return InlineKeyboardMarkup([
@@ -176,17 +175,17 @@ async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_premium[user_id] = True
     await update.message.reply_text("✅ Ahora tienes acceso Premium. ¡Disfruta sin límites!")
 
-# El manejador para recibir los updates vía webhook
+# Manejador webhook para aiohttp
 async def webhook_handler(request):
     data = await request.json()
     update = Update.de_json(data, app.bot)
     await app.update_queue.put(update)
     return web.Response(text="OK")
 
-# Configurar la aplicación del bot
+# Configurar la aplicación
 app = Application.builder().token(TOKEN).build()
 
-# Registrar handlers
+# Añadir handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("premium", activar_premium))
 app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
@@ -198,12 +197,10 @@ def main():
     import asyncio
 
     async def run():
-        # Configura el webhook en Telegram
         await app.initialize()
         await app.bot.set_webhook(WEBHOOK_URL)
         await app.start()
 
-        # Inicia el servidor web
         web_app = web.Application()
         web_app.router.add_post(WEBHOOK_PATH, webhook_handler)
 
