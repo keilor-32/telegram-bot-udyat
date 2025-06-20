@@ -1,4 +1,6 @@
+import os
 import logging
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
 from telegram.ext import (
     Application,
@@ -9,8 +11,9 @@ from telegram.ext import (
     filters,
 )
 
-# === TOKEN DE TU BOT ===
-TOKEN = '8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g'  # Reemplaza con tu token real
+# === CARGAR TOKEN DESDE VARIABLES DE ENTORNO ===
+load_dotenv()
+TOKEN = os.getenv('TOKEN')  # El token estará en .env o configurado en Render
 
 # === CANALES REQUERIDOS PARA USAR EL BOT ===
 CHANNELS = {
@@ -19,9 +22,9 @@ CHANNELS = {
 }
 
 # === BASE DE DATOS TEMPORAL ===
-user_premium = {}           # user_id: True si es premium
-user_reenvios = {}          # user_id: cantidad de reenvíos usados
-admin_videos = {}           # msg_id: tipo de contenido ("video" o "link")
+user_premium = {}
+user_reenvios = {}
+admin_videos = {}
 FREE_LIMIT = 3
 
 # === LOGGING ===
@@ -42,9 +45,8 @@ def get_main_menu():
     ])
 
 # === /start ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 ¡Hola! Antes de comenzar debes unirte a los canales.")
-
     keyboard = [
         [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
         [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
@@ -55,8 +57,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# === VERIFICACIÓN DE CANALES ===
-async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# === VERIFICAR SUSCRIPCIÓN ===
+async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
@@ -143,7 +145,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "volver":
         await query.message.reply_text("🔙 Menú principal:", reply_markup=get_main_menu())
 
-# === DETECTAR VIDEO O ENLACE DE ADMIN ===
+# === DETECTAR VIDEO O LINK DE ADMIN ===
 async def detectar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     chat_id = msg.chat_id
@@ -158,7 +160,6 @@ async def detectar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg_id = msg.message_id
 
-    # Determinar si es video o link
     tipo = None
     if msg.video:
         tipo = "video"
@@ -177,13 +178,13 @@ async def bienvenida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for user in update.message.new_chat_members:
         await update.message.reply_text(f"👋 Bienvenido, {user.full_name} al grupo 🎉")
 
-# === COMANDO /premium PARA ACTIVAR
+# === /premium ===
 async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_premium[user_id] = True
     await update.message.reply_text("✅ Ahora tienes acceso Premium. ¡Disfruta sin límites!")
 
-# === INICIO DEL BOT ===
+# === MAIN ===
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -197,3 +198,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
