@@ -11,30 +11,29 @@ from telegram.ext import (
     filters,
 )
 
-# Carga variables de entorno (.env o configuradas en Render)
+# Cargar variables de entorno
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
-PORT = int(os.environ.get('PORT', '8443'))  # Puerto que asigna Render o 8443 por defecto
+PORT = int(os.getenv('PORT', '10000'))
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
-# Canales necesarios para el bot
+# Canales requeridos para usar el bot
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
 }
 
-# Base de datos temporal (diccionarios en memoria)
 user_premium = {}
 user_reenvios = {}
 admin_videos = {}
 FREE_LIMIT = 3
 
-# Logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# Menú principal
 def get_main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
@@ -45,8 +44,8 @@ def get_main_menu():
          InlineKeyboardButton("❓ Ayuda", callback_data="ayuda")]
     ])
 
-# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"/start recibido de user_id={update.effective_user.id}")
     await update.message.reply_text("👋 ¡Hola! Antes de comenzar debes unirte a los canales.")
     keyboard = [
         [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
@@ -58,7 +57,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# Verificar suscripción
+# (Aquí sigue todo tu código original, sin cambios...)
+
+# Copia aquí las funciones verify, handle_callback, detectar_admin, bienvenida, activar_premium exactamente igual
+
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -80,7 +82,6 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "❌ Aún no estás suscrito a:\n" + "\n".join(f"• {c}" for c in not_joined)
         await query.edit_message_text(msg)
 
-# Callbacks de botones
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -98,13 +99,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🔙 Volver", callback_data="volver")]
             ])
         )
-
     elif query.data == "comprar":
         await query.message.reply_text(
             "💰 Contacta con @SoporteUdyat para comprar el Plan Premium.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]])
         )
-
     elif query.data.startswith("reenviar_"):
         original_msg_id = int(query.data.split("_")[1])
         user_reenviados = user_reenvios.get(user_id, 0)
@@ -126,7 +125,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]),
                 parse_mode="Markdown"
             )
-
     elif query.data == "perfil":
         await query.message.reply_text(
             f"""🧑 Tu perfil:
@@ -136,17 +134,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Plan: {"Premium" if user_premium.get(user_id, False) else "Free"}""",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]])
         )
-
     elif query.data == "info":
         await query.message.reply_text("ℹ️ Bot para compartir contenido exclusivo.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
-
     elif query.data == "ayuda":
         await query.message.reply_text("❓ Contacta @SoporteUdyat si necesitas ayuda.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
-
     elif query.data == "volver":
         await query.message.reply_text("🔙 Menú principal:", reply_markup=get_main_menu())
 
-# Detectar video o link de administrador
 async def detectar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     chat_id = msg.chat_id
@@ -174,22 +168,18 @@ async def detectar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await msg.reply_text("🔁 Puedes reenviar este contenido (hasta 3 veces si eres Free).", reply_markup=boton)
 
-# Bienvenida a nuevos miembros
 async def bienvenida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for user in update.message.new_chat_members:
         await update.message.reply_text(f"👋 Bienvenido, {user.full_name} al grupo 🎉")
 
-# Activar premium
 async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_premium[user_id] = True
     await update.message.reply_text("✅ Ahora tienes acceso Premium. ¡Disfruta sin límites!")
 
-# MAIN - usando webhook para Render
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # Agrega handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("premium", activar_premium))
     app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
@@ -197,14 +187,13 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bienvenida))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Entity("url"), detectar_admin))
 
-    # URL pública que Render asigna
-    WEBHOOK_URL = f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook/{TOKEN}"
+    logger.info("✅ BOT INICIADO CORRECTAMENTE")
 
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=TOKEN,
         webhook_url=WEBHOOK_URL,
+        webhook_path="/",
     )
 
 if __name__ == "__main__":
