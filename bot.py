@@ -1,6 +1,7 @@
 import os
 import logging
 from dotenv import load_dotenv
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
 from telegram.ext import (
     Application,
@@ -13,27 +14,30 @@ from telegram.ext import (
 
 # Cargar variables de entorno
 load_dotenv()
-TOKEN = os.getenv('TOKEN')
-PORT = int(os.getenv('PORT', '8443'))  # puerto para el webhook
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Ej: https://tu-app.onrender.com/
+TOKEN = os.getenv("TOKEN")
+PORT = int(os.getenv("PORT", "8080"))
+# Cambia esta URL por la que te da Render para tu servicio, más el path del webhook
+WEBHOOK_URL = f"https://telegram-bot-udyat-8.onrender.com/webhook/{TOKEN}"
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
 
-# Canales requeridos
+# Configuración básica de logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+# Variables globales para la lógica del bot
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
 }
 
-# Base datos temporal
 user_premium = {}
 user_reenvios = {}
 admin_videos = {}
 FREE_LIMIT = 3
 
-# Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# Funciones del bot (start, verify, handle_callback, etc.) 
 
 def get_main_menu():
     return InlineKeyboardMarkup([
@@ -95,13 +99,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🔙 Volver", callback_data="volver")]
             ])
         )
-
     elif query.data == "comprar":
         await query.message.reply_text(
             "💰 Contacta con @SoporteUdyat para comprar el Plan Premium.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]])
         )
-
     elif query.data.startswith("reenviar_"):
         original_msg_id = int(query.data.split("_")[1])
         user_reenviados = user_reenvios.get(user_id, 0)
@@ -123,7 +125,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]),
                 parse_mode="Markdown"
             )
-
     elif query.data == "perfil":
         await query.message.reply_text(
             f"""🧑 Tu perfil:
@@ -133,13 +134,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Plan: {"Premium" if user_premium.get(user_id, False) else "Free"}""",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]])
         )
-
     elif query.data == "info":
         await query.message.reply_text("ℹ️ Bot para compartir contenido exclusivo.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
-
     elif query.data == "ayuda":
         await query.message.reply_text("❓ Contacta @SoporteUdyat si necesitas ayuda.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
-
     elif query.data == "volver":
         await query.message.reply_text("🔙 Menú principal:", reply_markup=get_main_menu())
 
@@ -156,7 +154,6 @@ async def detectar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg_id = msg.message_id
-
     tipo = None
     if msg.video:
         tipo = "video"
@@ -179,21 +176,46 @@ async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_premium[user_id] = True
     await update.message.reply_text("✅ Ahora tienes acceso Premium. ¡Disfruta sin límites!")
 
+# El manejador para recibir los updates vía webhook
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, app.bot)
+    await app.update_queue.put(update)
+    return web.Response(text="OK")
+
+# Configurar la aplicación del bot
+app = Application.builder().token(TOKEN).build()
+
+# Registrar handlers
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("premium", activar_premium))
+app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+app.add_handler(CallbackQueryHandler(handle_callback))
+app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bienvenida))
+app.add_handler(MessageHandler(filters.VIDEO | filters.Entity("url"), detectar_admin))
+
 def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("premium", activar_premium))
-    app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bienvenida))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.Entity("url"), detectar_admin))
-    print("✅ BOT INICIADO CORRECTAMENTE")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
-        path="/",
-    )
+    import asyncio
+
+    async def run():
+        # Configura el webhook en Telegram
+        await app.initialize()
+        await app.bot.set_webhook(WEBHOOK_URL)
+        await app.start()
+
+        # Inicia el servidor web
+        web_app = web.Application()
+        web_app.router.add_post(WEBHOOK_PATH, webhook_handler)
+
+        runner = web.AppRunner(web_app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+
+        logging.info("✅ Bot y servidor web corriendo")
+        await app.idle()
+
+    asyncio.run(run())
 
 if __name__ == "__main__":
     main()
