@@ -3,7 +3,6 @@ import logging
 import json
 from datetime import datetime, timedelta
 from aiohttp import web
-# from dotenv import load_dotenv  # Comenta o descomenta según uso local o deploy
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     LabeledPrice
@@ -13,11 +12,11 @@ from telegram.ext import (
     MessageHandler, ContextTypes, filters, PreCheckoutQueryHandler
 )
 
-# load_dotenv()  # Solo para pruebas locales
-
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise ValueError("⚠️ ERROR: La variable de entorno TOKEN no está configurada o está vacía. Verifica tu configuración.")
+
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN") or ""  # Tu token proveedor de pagos aquí
 
 PORT = int(os.getenv("PORT", "8080"))
 WEBHOOK_URL = f"https://telegram-bot-udyat-8.onrender.com/webhook/{TOKEN}"
@@ -46,7 +45,7 @@ PREMIUM_ITEM = {
     "title": "Plan Premium",
     "description": "Acceso y reenvíos ilimitados por 30 días.",
     "payload": "premium_plan",
-    "currency": "XTR",
+    "currency": "XTR",  # Moneda que uses para Telegram Stars
     "prices": [LabeledPrice("Premium por 30 días", 100)]  # 100 estrellas
 }
 
@@ -86,6 +85,17 @@ def register_view(user_id):
         user_daily_views[user_id] = {}
     user_daily_views[user_id][today] = user_daily_views[user_id].get(today, 0) + 1
     save_data()
+
+async def is_subscribed_to_all(user_id, context):
+    for name, username in CHANNELS.items():
+        try:
+            member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+            if member.status not in ['member', 'administrator', 'creator']:
+                return False
+        except Exception as e:
+            logger.warning(f"Error verificando canal {username}: {e}")
+            return False
+    return True
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 ¡Hola! Antes de comenzar debes unirte a los canales.")
@@ -154,7 +164,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title=PREMIUM_ITEM["title"],
             description=PREMIUM_ITEM["description"],
             payload=PREMIUM_ITEM["payload"],
-            provider_token=os.getenv("PROVIDER_TOKEN") or "",
+            provider_token=PROVIDER_TOKEN,
             currency=PREMIUM_ITEM["currency"],
             prices=PREMIUM_ITEM["prices"],
             start_parameter="buy-premium"
@@ -177,6 +187,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pkg = content_packages.get(pkg_id)
         if not pkg:
             await query.message.reply_text("❌ Video no encontrado o expirado.")
+            return
+        if not await is_subscribed_to_all(user_id, context):
+            await query.message.reply_text(
+                "🔒 Debes estar suscripto a todos los canales para ver este video.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
+                    [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
+                    [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")]
+                ])
+            )
             return
         if not can_view_video(user_id):
             await query.message.reply_text(
@@ -247,7 +267,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if payment.invoice_payload == PREMIUM_ITEM["payload"]:
         exp = datetime.utcnow() + timedelta(days=30)
         user_premium[user_id] = exp
-        user_daily_views[user_id] = {}
+        user_daily_views[user_id] = {}  # Reset diario al comprar premium
         save_data()
         await update.message.reply_text(
             f"🎉 ¡Gracias por tu compra!\nAcceso Premium hasta {exp.strftime('%Y-%m-%d')}\nReenvíos y vistas ilimitadas activados."
