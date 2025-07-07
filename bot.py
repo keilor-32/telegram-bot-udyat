@@ -10,6 +10,7 @@ from telegram.ext import (
     filters, PreCheckoutQueryHandler
 )
 from aiohttp import web
+import asyncio
 
 # --- CONFIGURACIÓN --- #
 TOKEN = os.getenv("TOKEN")
@@ -312,14 +313,24 @@ web_app.router.add_post("/webhook", webhook_handler)
 web_app.on_startup.append(on_startup)
 web_app.on_shutdown.append(on_shutdown)
 
-def main():
+async def main():
     load_data()
     logger.info("🤖 Bot iniciado con webhook")
-    web.run_app(web_app, port=PORT)
+    await app_telegram.start()
+    # Este start_polling inicia el dispatcher para procesar la cola update_queue
+    await app_telegram.updater.start_polling()
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"Servidor webhook escuchando en puerto {PORT}")
+
+    # Mantener vivo el proceso
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    main()
-
+    asyncio.run(main())
 
 
 
