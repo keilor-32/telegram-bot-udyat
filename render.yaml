@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: telegram-bot-udyat
     env: python
     plan: free
@@ -10,4 +10,7 @@ services:
         value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
       - key: PROVIDER_TOKEN
         value: ""
+      - key: APP_URL
+        value: "https://telegram-bot-udyat.onrender.com"
+
 
