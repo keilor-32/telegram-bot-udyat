@@ -7,7 +7,8 @@ services:
     startCommand: python bot.py
     envVars:
       - key: TOKEN
-        value: 8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g
+        value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"  # Cambia por tu token real de BotFather
       - key: PROVIDER_TOKEN
-        value: ""  # o tu token real de Telegram Stars
-
+        value: ""  # Si usas Telegram Stars, deja vacío o pon tu token si tienes
+      - key: PORT
+        value: "8080"
