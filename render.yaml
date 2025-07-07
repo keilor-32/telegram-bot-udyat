@@ -1,5 +1,5 @@
 services:
-  - type: web
+  - type: worker
     name: telegram-bot-udyat
     env: python
     plan: free
@@ -7,8 +7,7 @@ services:
     startCommand: python bot.py
     envVars:
       - key: TOKEN
-        value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"  # Cambia por tu token real de BotFather
+        value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
       - key: PROVIDER_TOKEN
-        value: ""  # Si usas Telegram Stars, deja vacío o pon tu token si tienes
-      - key: PORT
-        value: "8080"
+        value: ""
+
