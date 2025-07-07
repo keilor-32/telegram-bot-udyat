@@ -1,16 +1,10 @@
-services:
-  - type: web
-    name: telegram-bot-udyat
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
-    envVars:
-      - key: TOKEN
-        value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
-      - key: PROVIDER_TOKEN
-        value: ""
-      - key: APP_URL
-        value: "https://telegram-bot-udyat.onrender.com"
+envVars:
+  - key: TOKEN
+    value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
+  - key: APP_URL
+    value: "https://telegram-bot-udyat.onrender.com"
+  - key: PROVIDER_TOKEN
+    value: ""  # si usas pagos, sino vacío
+
 
 
