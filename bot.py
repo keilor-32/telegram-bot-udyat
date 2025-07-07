@@ -9,10 +9,11 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes,
     filters, PreCheckoutQueryHandler
 )
+from aiohttp import web
 
 # --- CONFIGURACIÓN --- #
 TOKEN = "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
-PROVIDER_TOKEN = ""  # Coloca aquí tu provider_token de Telegram Stars
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")  # Se lee de variable entorno
 
 CHANNELS = {
     'supertvw2': '@Supertvw2',
@@ -270,22 +271,49 @@ async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_data()
             logger.info(f"Grupo registrado: {chat.id}")
 
-# --- MAIN --- #
-app = Application.builder().token(TOKEN).build()
+# --- WEBHOOK HANDLER para aiohttp --- #
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, app_telegram.bot)
+    await app_telegram.update_queue.put(update)
+    return web.Response(text="OK")
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-app.add_handler(CallbackQueryHandler(handle_callback))
-app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
-app.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
-app.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+async def on_startup(app):
+    webhook_url = f"{APP_URL}/webhook"
+    await app_telegram.bot.set_webhook(webhook_url)
+    logger.info(f"Webhook configurado en {webhook_url}")
+
+async def on_shutdown(app):
+    await app_telegram.bot.delete_webhook()
+    logger.info("Webhook eliminado")
+
+# --- VARIABLES DE ENTORNO Render --- #
+APP_URL = os.getenv("APP_URL")  # Ej: https://telegram-bot-udyat.onrender.com
+PORT = int(os.getenv("PORT", "8080"))
+
+# --- CREACIÓN DE APP Telegram --- #
+app_telegram = Application.builder().token(TOKEN).build()
+
+# Agregar handlers
+app_telegram.add_handler(CommandHandler("start", start))
+app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+app_telegram.add_handler(CallbackQueryHandler(handle_callback))
+app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
+app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+
+# --- CONFIGURACIÓN aiohttp SERVER --- #
+web_app = web.Application()
+web_app.router.add_post("/webhook", webhook_handler)
+web_app.on_startup.append(lambda app: on_startup(app_telegram))
+web_app.on_shutdown.append(lambda app: on_shutdown(app_telegram))
 
 def main():
     load_data()
-    logger.info("🤖 Bot iniciado")
-    app.run_polling()
+    logger.info("🤖 Bot iniciado con webhook")
+    web.run_app(web_app, port=PORT)
 
 if __name__ == "__main__":
     main()
