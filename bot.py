@@ -3,7 +3,7 @@ import logging
 import json
 from datetime import datetime, timedelta
 from aiohttp import web
-from dotenv import load_dotenv
+# from dotenv import load_dotenv  # Comenta o descomenta según uso local o deploy
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     LabeledPrice
@@ -13,13 +13,10 @@ from telegram.ext import (
     MessageHandler, ContextTypes, filters, PreCheckoutQueryHandler
 )
 
-load_dotenv()
+# load_dotenv()  # Solo para pruebas locales
 
 TOKEN = os.getenv("TOKEN")
-
-print(f"DEBUG: TOKEN = {repr(TOKEN)}")  # Debug para ver el token (puedes borrar esta línea después)
-
-if not TOKEN or TOKEN.strip() == "":
+if not TOKEN:
     raise ValueError("⚠️ ERROR: La variable de entorno TOKEN no está configurada o está vacía. Verifica tu configuración.")
 
 PORT = int(os.getenv("PORT", "8080"))
@@ -176,7 +173,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "volver":
         await query.message.reply_text("🔙 Menú principal:", reply_markup=get_main_menu())
     elif data.startswith("video_"):
-        # Mostrar video protegido
         pkg_id = data.split("_", 1)[1]
         pkg = content_packages.get(pkg_id)
         if not pkg:
@@ -211,7 +207,6 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("❌ Primero debes enviar una sinopsis con imagen.")
         return
 
-    # Crear paquete único
     pkg_id = str(int(datetime.utcnow().timestamp()))
     content_packages[pkg_id] = {
         "photo_id": current_photo[user_id]["photo_id"],
@@ -221,7 +216,6 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del current_photo[user_id]
     save_data()
 
-    # Enviar solo portada con botón a todos los grupos conocidos
     boton = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Ver video completo", callback_data=f"video_{pkg_id}")]])
     for chat_id in known_chats:
         try:
@@ -293,7 +287,6 @@ if __name__ == "__main__":
         logger.info("✅ Bot y servidor web corriendo")
         await asyncio.Event().wait()
     asyncio.run(run())
-
 
 
 
