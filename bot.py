@@ -26,7 +26,7 @@ USER_VIEWS_FILE = "user_views.json"
 CONTENT_PACKAGES_FILE = "content_packages.json"
 KNOWN_CHATS_FILE = "known_chats.json"
 
-FREE_LIMIT_VIDEOS = 3  # Puedes poner 3 o 10 según prefieras
+FREE_LIMIT_VIDEOS = 3  # Puedes cambiar el límite para usuarios free
 
 PREMIUM_ITEM = {
     "title": "Plan Premium",
@@ -101,7 +101,6 @@ def get_main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
-    username_bot = (await context.bot.get_me()).username
 
     # Si viene con start=video_pkgid
     if args and args[0].startswith("video_"):
@@ -135,7 +134,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(
                 video=pkg["video_id"],
                 caption="🎬 Aquí tienes el video completo.",
-                protect_content=True
+                protect_content=not is_premium(user_id)  # Usuarios free: protegido, premium: sin protección
             )
         else:
             await update.message.reply_text(
@@ -182,7 +181,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     user_id = user.id
     data = query.data
-    username_bot = (await context.bot.get_me()).username
 
     if data == "planes":
         await query.message.reply_text(
@@ -283,7 +281,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=content_packages[pkg_id]["photo_id"],
                 caption=content_packages[pkg_id]["caption"],
                 reply_markup=boton,
-                protect_content=True
+                protect_content=True  # Protegemos para que nadie reenvíe desde el grupo
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
@@ -329,8 +327,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
 
 
