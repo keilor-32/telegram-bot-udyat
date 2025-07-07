@@ -1,28 +1,29 @@
-import os
 import logging
 import json
 from datetime import datetime, timedelta
-from aiohttp import web
+import os
+
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    LabeledPrice
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 )
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters, PreCheckoutQueryHandler
+    Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes,
+    filters, PreCheckoutQueryHandler
 )
 
+from aiohttp import web
+from dotenv import load_dotenv
+
+load_dotenv()
+
 TOKEN = os.getenv("TOKEN")
-if not TOKEN:
-    raise ValueError("⚠️ ERROR: La variable de entorno TOKEN no está configurada o está vacía. Verifica tu configuración.")
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ej: https://tu-dominio.com/telegram_webhook
 
-PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN") or ""  # Tu token proveedor de pagos aquí
+if not TOKEN or not PROVIDER_TOKEN or not WEBHOOK_URL:
+    raise ValueError("⚠️ Debes configurar TOKEN, PROVIDER_TOKEN y WEBHOOK_URL en .env")
 
-PORT = int(os.getenv("PORT", "8080"))
-WEBHOOK_URL = f"https://telegram-bot-udyat-8.onrender.com/webhook/{TOKEN}"
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
-
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 CHANNELS = {
@@ -30,45 +31,20 @@ CHANNELS = {
     'fullvvd': '@fullvvd'
 }
 
-DATA_FILE = "bot_data.json"
+user_premium = {}
+user_daily_views = {}
+known_chats = set()
+content_packages = {}
 
-user_premium = {}     # user_id: expiration datetime
-user_daily_views = {} # user_id: {date_str: views_count}
-known_chats = set()   # grupos donde enviar contenido
-content_packages = {} # pkg_id: {"photo_id":..., "caption":..., "video_id":...}
-current_photo = {}    # user_id: {"photo_id":..., "caption":...}
-
-FREE_LIMIT_VIEWS = 3
-FREE_LIMIT_REENVIOS = 3
+FREE_LIMIT = 10
 
 PREMIUM_ITEM = {
     "title": "Plan Premium",
     "description": "Acceso y reenvíos ilimitados por 30 días.",
     "payload": "premium_plan",
-    "currency": "XTR",  # Moneda que uses para Telegram Stars
-    "prices": [LabeledPrice("Premium por 30 días", 100)]  # 100 estrellas
+    "currency": "XTR",
+    "prices": [LabeledPrice("Premium por 30 días", 1)]
 }
-
-def save_data():
-    data = {
-        "user_premium": {str(k): v.isoformat() for k, v in user_premium.items()},
-        "user_daily_views": {str(k): v for k, v in user_daily_views.items()},
-        "content_packages": content_packages,
-        "known_chats": list(known_chats)
-    }
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
-
-def load_data():
-    global user_premium, user_daily_views, content_packages, known_chats
-    if not os.path.exists(DATA_FILE):
-        return
-    with open(DATA_FILE, "r") as f:
-        data = json.load(f)
-    user_premium = {int(k): datetime.fromisoformat(v) for k, v in data.get("user_premium", {}).items()}
-    user_daily_views = {int(k): v for k, v in data.get("user_daily_views", {}).items()}
-    content_packages = data.get("content_packages", {})
-    known_chats = set(data.get("known_chats", []))
 
 def is_premium(user_id):
     return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
@@ -77,36 +53,65 @@ def can_view_video(user_id):
     if is_premium(user_id):
         return True
     today = str(datetime.utcnow().date())
-    return user_daily_views.get(user_id, {}).get(today, 0) < FREE_LIMIT_VIEWS
+    return user_daily_views.get(user_id, {}).get(today, 0) < FREE_LIMIT
 
 def register_view(user_id):
     today = str(datetime.utcnow().date())
     if user_id not in user_daily_views:
         user_daily_views[user_id] = {}
     user_daily_views[user_id][today] = user_daily_views[user_id].get(today, 0) + 1
-    save_data()
 
-async def is_subscribed_to_all(user_id, context):
-    for name, username in CHANNELS.items():
-        try:
-            member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
-            if member.status not in ['member', 'administrator', 'creator']:
-                return False
-        except Exception as e:
-            logger.warning(f"Error verificando canal {username}: {e}")
-            return False
-    return True
+current_photo = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 ¡Hola! Antes de comenzar debes unirte a los canales.")
-    keyboard = [
-        [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
-        [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
-        [InlineKeyboardButton("✅ Verificar suscripción", callback_data='verify')]
-    ]
-    await update.message.reply_text("📌 Únete a ambos y luego presiona '✅ Verificar suscripción'.", reply_markup=InlineKeyboardMarkup(keyboard))
+    args = context.args
+    user_id = update.effective_user.id
 
-async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if args and args[0].startswith("video_"):
+        pkg_id = args[0].split("_")[1]
+        pkg = content_packages.get(pkg_id)
+        if not pkg or "video_id" not in pkg:
+            await update.message.reply_text("❌ Video no disponible.")
+            return
+
+        for name, username in CHANNELS.items():
+            try:
+                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+                if member.status not in ['member', 'administrator', 'creator']:
+                    await update.message.reply_text(
+                        "🔒 Para ver este contenido debes unirte a todos los canales primero.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
+                            [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
+                            [InlineKeyboardButton("✅ Verificar suscripción", callback_data='verify')]
+                        ])
+                    )
+                    return
+            except:
+                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
+                return
+
+        if can_view_video(user_id):
+            register_view(user_id)
+            await update.message.reply_video(
+                video=pkg["video_id"],
+                caption="🎬 Aquí tienes el video completo.",
+                protect_content=True
+            )
+        else:
+            await update.message.reply_text(
+                "🚫 Límite de 10 videos por día alcanzado.\n💎 Compra Premium para ver sin límites.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Comprar Premium", callback_data="comprar")]])
+            )
+    else:
+        keyboard = [
+            [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
+            [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
+            [InlineKeyboardButton("✅ Verificar suscripción", callback_data='verify')]
+        ]
+        await update.message.reply_text("👋 ¡Hola! Para acceder debes unirte a los canales y verificar.", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def verificar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
@@ -119,45 +124,26 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             not_joined.append(name)
     if not not_joined:
-        await query.edit_message_text("✅ Verificación completada. Aquí tienes el menú:")
-        await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
+        await query.edit_message_text("✅ Verificación completada. Menú disponible:")
+        await query.message.reply_text("📋 Menú:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Planes", callback_data="planes")]]))
     else:
-        msg = "❌ Aún no estás suscrito a:\n" + "\n".join(f"• {c}" for c in not_joined)
-        await query.edit_message_text(msg)
-
-def get_main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
-         InlineKeyboardButton("👥 Grupo", url="https://t.me/udyat_channel")],
-        [InlineKeyboardButton("💎 Planes", callback_data="planes"),
-         InlineKeyboardButton("🧑 Perfil", callback_data="perfil")],
-        [InlineKeyboardButton("ℹ️ Info", callback_data="info"),
-         InlineKeyboardButton("❓ Ayuda", callback_data="ayuda")]
-    ])
+        await query.edit_message_text("❌ Aún no estás suscrito a todos los canales.")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user = query.from_user
-    user_id = user.id
+    user_id = query.from_user.id
     data = query.data
 
     if data == "planes":
         await query.message.reply_text(
-            "💎 *Planes disponibles:*\n\n"
-            f"🔹 Free – Hasta {FREE_LIMIT_REENVIOS} reenvíos y {FREE_LIMIT_VIEWS} vistas por día.\n"
-            "🔹 Premium – Reenvíos y vistas ilimitadas por 1 mes.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💸 Comprar Premium", callback_data="comprar")],
-                [InlineKeyboardButton("🔙 Volver", callback_data="volver")]
-            ])
+            "🔹 Free: Hasta 10 videos por día.\n🔸 Premium: Acceso y reenvíos ilimitados.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Comprar Premium", callback_data="comprar")]])
         )
     elif data == "comprar":
-        now = datetime.utcnow()
-        exp = user_premium.get(user_id)
-        if exp and exp > now:
-            await query.message.reply_text("✅ Ya eres usuario Premium hasta " + exp.strftime("%Y-%m-%d") + ".")
+        if is_premium(user_id):
+            exp = user_premium[user_id].strftime("%Y-%m-%d")
+            await query.message.reply_text(f"✅ Ya eres Premium hasta {exp}.")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -169,47 +155,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prices=PREMIUM_ITEM["prices"],
             start_parameter="buy-premium"
         )
-    elif data == "perfil":
-        plan = "Premium" if is_premium(user_id) else "Free"
-        exp_str = user_premium.get(user_id).strftime("%Y-%m-%d") if is_premium(user_id) else "-"
-        await query.message.reply_text(
-            f"🧑 Perfil:\n• {user.full_name}\n• @{user.username or 'Sin usuario'}\n• ID: {user_id}\n• Plan: {plan}\n• Expira: {exp_str}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]])
-        )
-    elif data == "info":
-        await query.message.reply_text("ℹ️ Bot para compartir contenido exclusivo.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
-    elif data == "ayuda":
-        await query.message.reply_text("❓ Contacta @SoporteUdyat si necesitas ayuda.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="volver")]]))
-    elif data == "volver":
-        await query.message.reply_text("🔙 Menú principal:", reply_markup=get_main_menu())
-    elif data.startswith("video_"):
-        pkg_id = data.split("_", 1)[1]
-        pkg = content_packages.get(pkg_id)
-        if not pkg:
-            await query.message.reply_text("❌ Video no encontrado o expirado.")
-            return
-        if not await is_subscribed_to_all(user_id, context):
-            await query.message.reply_text(
-                "🔒 Debes estar suscripto a todos los canales para ver este video.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
-                    [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
-                    [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")]
-                ])
-            )
-            return
-        if not can_view_video(user_id):
-            await query.message.reply_text(
-                f"🚫 Límite de {FREE_LIMIT_VIEWS} videos por día alcanzado.\n💎 Compra Premium para ver sin límites.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Comprar Premium", callback_data="comprar")]])
-            )
-            return
-        register_view(user_id)
-        await query.message.reply_video(
-            video=pkg["video_id"],
-            caption="🎬 Aquí tienes el video completo.",
-            protect_content=True
-        )
+
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if update.message.successful_payment.invoice_payload == PREMIUM_ITEM["payload"]:
+        user_premium[user_id] = datetime.utcnow() + timedelta(days=30)
+        await update.message.reply_text("🎉 ¡Gracias por tu compra! Premium activado por 30 días.")
 
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -234,9 +188,10 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "video_id": msg.video.file_id
     }
     del current_photo[user_id]
-    save_data()
 
-    boton = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Ver video completo", callback_data=f"video_{pkg_id}")]])
+    boton = InlineKeyboardMarkup([[
+        InlineKeyboardButton("▶️ Ver video completo", url=f"https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}")
+    ]])
     for chat_id in known_chats:
         try:
             await context.bot.send_photo(
@@ -255,58 +210,55 @@ async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if chat.type in ['group', 'supergroup']:
         known_chats.add(chat.id)
-        save_data()
-        logger.info(f"Grupo detectado y guardado: {chat.id}")
+        logger.info(f"Grupo detectado: {chat.id}")
 
-async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
-
-async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    payment = update.message.successful_payment
-    user_id = update.effective_user.id
-    if payment.invoice_payload == PREMIUM_ITEM["payload"]:
-        exp = datetime.utcnow() + timedelta(days=30)
-        user_premium[user_id] = exp
-        user_daily_views[user_id] = {}  # Reset diario al comprar premium
-        save_data()
-        await update.message.reply_text(
-            f"🎉 ¡Gracias por tu compra!\nAcceso Premium hasta {exp.strftime('%Y-%m-%d')}\nReenvíos y vistas ilimitadas activados."
-        )
-
-async def webhook_handler(request):
+# webhook handler para aiohttp
+async def telegram_webhook(request):
+    app = request.app["bot_app"]
     data = await request.json()
-    upd = Update.de_json(data, app.bot)
-    await app.update_queue.put(upd)
-    return web.Response(text="OK")
+    update = Update.de_json(data, app.bot)
+    await app.update_queue.put(update)
+    return web.Response(text="ok")
 
-app = Application.builder().token(TOKEN).build()
+# startup webhook setup
+async def on_startup(app):
+    bot = app["bot_app"].bot
+    await bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook seteado en {WEBHOOK_URL}")
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-app.add_handler(CallbackQueryHandler(handle_callback))
-app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(".+"), recibir_foto))
-app.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
-app.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
-app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+# cleanup webhook delete
+async def on_cleanup(app):
+    bot = app["bot_app"].bot
+    await bot.delete_webhook()
+    logger.info("Webhook eliminado")
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    # Handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(verificar, pattern="^verify$"))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
+    app.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
+    app.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+
+    # Crear servidor aiohttp para webhook
+    web_app = web.Application()
+    web_app["bot_app"] = app
+    web_app.router.add_post("/telegram_webhook", telegram_webhook)
+    web_app.on_startup.append(on_startup)
+    web_app.on_cleanup.append(on_cleanup)
+
+    port = int(os.environ.get("PORT", "8080"))
+    logger.info(f"Servidor web iniciado en puerto {port}")
+    web.run_app(web_app, port=port)
 
 if __name__ == "__main__":
-    load_data()
+    main()
 
-    import asyncio
-    async def run():
-        await app.initialize()
-        await app.bot.set_webhook(WEBHOOK_URL)
-        await app.start()
-        web_app = web.Application()
-        web_app.router.add_post(WEBHOOK_PATH, webhook_handler)
-        runner = web.AppRunner(web_app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", PORT)
-        await site.start()
-        logger.info("✅ Bot y servidor web corriendo")
-        await asyncio.Event().wait()
-    asyncio.run(run())
 
 
 
