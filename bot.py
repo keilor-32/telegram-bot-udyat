@@ -14,7 +14,14 @@ from telegram.ext import (
 )
 
 load_dotenv()
+
 TOKEN = os.getenv("TOKEN")
+
+print(f"DEBUG: TOKEN = {repr(TOKEN)}")  # Debug para ver el token (puedes borrar esta línea después)
+
+if not TOKEN or TOKEN.strip() == "":
+    raise ValueError("⚠️ ERROR: La variable de entorno TOKEN no está configurada o está vacía. Verifica tu configuración.")
+
 PORT = int(os.getenv("PORT", "8080"))
 WEBHOOK_URL = f"https://telegram-bot-udyat-8.onrender.com/webhook/{TOKEN}"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
