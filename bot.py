@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import asyncio
 from datetime import datetime, timedelta
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
@@ -10,7 +11,6 @@ from telegram.ext import (
     filters, PreCheckoutQueryHandler
 )
 from aiohttp import web
-import asyncio
 
 # --- CONFIGURACIÓN --- #
 TOKEN = os.getenv("TOKEN")
@@ -316,18 +316,29 @@ web_app.on_shutdown.append(on_shutdown)
 async def main():
     load_data()
     logger.info("🤖 Bot iniciado con webhook")
+
+    # Inicializar la app Telegram
+    await app_telegram.initialize()
     await app_telegram.start()
-    # Este start_polling inicia el dispatcher para procesar la cola update_queue
-    await app_telegram.updater.start_polling()
+
+    # Levantar servidor aiohttp
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"Servidor webhook escuchando en puerto {PORT}")
 
-    # Mantener vivo el proceso
-    while True:
-        await asyncio.sleep(3600)
+    logger.info(f"Servidor webhook corriendo en puerto {PORT}")
+
+    # Mantener la app corriendo
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Deteniendo bot...")
+    finally:
+        await app_telegram.stop()
+        await app_telegram.shutdown()
+        await runner.cleanup()
 
 if __name__ == "__main__":
     asyncio.run(main())
