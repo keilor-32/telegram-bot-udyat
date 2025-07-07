@@ -8,4 +8,6 @@ services:
     envVars:
       - key: TOKEN
         value: 8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g
+      - key: PROVIDER_TOKEN
+        value: ""  # o tu token real de Telegram Stars
 
