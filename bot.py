@@ -12,8 +12,15 @@ from telegram.ext import (
 from aiohttp import web
 
 # --- CONFIGURACIÓN --- #
-TOKEN = "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
+TOKEN = os.getenv("TOKEN")
 PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")  # Se lee de variable entorno
+APP_URL = os.getenv("APP_URL")  # Ejemplo: https://telegram-bot-udyat.onrender.com
+PORT = int(os.getenv("PORT", "8080"))
+
+if not TOKEN:
+    raise ValueError("❌ ERROR: La variable de entorno TOKEN no está configurada.")
+if not APP_URL:
+    raise ValueError("❌ ERROR: La variable de entorno APP_URL no está configurada.")
 
 CHANNELS = {
     'supertvw2': '@Supertvw2',
@@ -103,7 +110,6 @@ def get_main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
-    username_bot = (await context.bot.get_me()).username
 
     if args and args[0].startswith("video_"):
         pkg_id = args[0].split("_")[1]
@@ -287,10 +293,6 @@ async def on_shutdown(app):
     await app_telegram.bot.delete_webhook()
     logger.info("Webhook eliminado")
 
-# --- VARIABLES DE ENTORNO Render --- #
-APP_URL = os.getenv("APP_URL")  # Ej: https://telegram-bot-udyat.onrender.com
-PORT = int(os.getenv("PORT", "8080"))
-
 # --- CREACIÓN DE APP Telegram --- #
 app_telegram = Application.builder().token(TOKEN).build()
 
@@ -307,8 +309,8 @@ app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, d
 # --- CONFIGURACIÓN aiohttp SERVER --- #
 web_app = web.Application()
 web_app.router.add_post("/webhook", webhook_handler)
-web_app.on_startup.append(lambda app: on_startup(app_telegram))
-web_app.on_shutdown.append(lambda app: on_shutdown(app_telegram))
+web_app.on_startup.append(on_startup)
+web_app.on_shutdown.append(on_shutdown)
 
 def main():
     load_data()
