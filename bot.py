@@ -38,6 +38,22 @@ PREMIUM_ITEM = {
     "prices": [LabeledPrice("Premium por 30 días", 1)]  # 1 estrella
 }
 
+PLAN_PRO_ITEM = {
+    "title": "Plan Pro",
+    "description": "50 videos diarios, sin reenvíos ni compartir.",
+    "payload": "plan_pro",
+    "currency": "XTR",
+    "prices": [LabeledPrice("Plan Pro por 30 días", 40)]  # 40 estrellas
+}
+
+PLAN_ULTRA_ITEM = {
+    "title": "Plan Ultra",
+    "description": "Videos y reenvíos ilimitados por 30 días.",
+    "payload": "plan_ultra",
+    "currency": "XTR",
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)]  # 100 estrellas
+}
+
 # --- ARCHIVOS --- #
 USER_PREMIUM_FILE = "user_premium.json"
 USER_VIEWS_FILE = "user_views.json"
@@ -103,9 +119,49 @@ def get_main_menu():
          InlineKeyboardButton("👥 Grupo", url="https://t.me/udyat_channel")],
         [InlineKeyboardButton("💎 Planes", callback_data="planes"),
          InlineKeyboardButton("🧑 Perfil", callback_data="perfil")],
+        [InlineKeyboardButton("🎧 Audio Libros", callback_data="audio_libros"),
+         InlineKeyboardButton("📚 Libro PDF", callback_data="libro_pdf")],
+        [InlineKeyboardButton("💬 Chat Pedido", callback_data="chat_pedido"),
+         InlineKeyboardButton("🎓 Cursos", callback_data="cursos")],
         [InlineKeyboardButton("ℹ️ Info", callback_data="info"),
          InlineKeyboardButton("❓ Ayuda", callback_data="ayuda")]
     ])
+
+def get_plan_menu_text(user_id):
+    if is_premium(user_id):
+        plan_actual = "Premium (ilimitado)"
+    else:
+        plan_actual = "Free (3 videos/día, sin reenvíos)"
+
+    texto = (
+        "💎 *Planes de suscripción*\n\n"
+        f"Tu plan actual: *{plan_actual}*\n\n"
+        "Elige uno de los siguientes planes:"
+    )
+    return texto
+
+def get_plan_pro_text():
+    return (
+        "🔹 *Plan Pro*\n\n"
+        "Precio: 40 estrellas\n"
+        "Duración: 30 días\n"
+        "Beneficios:\n"
+        "- 50 videos diarios\n"
+        "- Sin reenvíos ni compartir\n\n"
+        "✖️ Reenvíos\n"
+        "✖️ Compartir"
+    )
+
+def get_plan_ultra_text():
+    return (
+        "🔹 *Plan Ultra*\n\n"
+        "Precio: 100 estrellas\n"
+        "Duración: 30 días\n"
+        "Beneficios:\n"
+        "- Videos ilimitados\n"
+        "- Reenvíos ilimitados ✅\n"
+        "- Compartir ✅"
+    )
 
 # --- HANDLERS --- #
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,10 +201,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 protect_content=not is_premium(user_id)  # Premium pueden reenviar
             )
         else:
+            texto_planes = get_plan_menu_text(user_id)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔹 Plan Pro", callback_data="plan_pro")],
+                [InlineKeyboardButton("🔹 Plan Ultra", callback_data="plan_ultra")],
+                [InlineKeyboardButton("🔙 Volver", callback_data="planes_volver")]
+            ])
             await update.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
-                "💎 Compra Premium para acceso y reenvíos ilimitados.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Comprar Premium (1 ⭐)", callback_data="comprar")]])
+                "💎 Compra un plan para seguir viendo:",
+                reply_markup=keyboard
             )
     else:
         await update.message.reply_text(
@@ -186,13 +248,65 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "planes":
-        await query.message.reply_text(
-            f"💎 *Planes disponibles:*\n\n"
-            f"🔹 Free – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n"
-            "🔹 Premium – Acceso y reenvíos ilimitados por 30 días.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Comprar Premium (1 ⭐)", callback_data="comprar")]])
+        texto_planes = get_plan_menu_text(user_id)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔹 Plan Pro", callback_data="plan_pro")],
+            [InlineKeyboardButton("🔹 Plan Ultra", callback_data="plan_ultra")],
+            [InlineKeyboardButton("🔙 Volver", callback_data="planes_volver")]
+        ])
+        await query.message.reply_text(texto_planes, parse_mode="Markdown", reply_markup=keyboard)
+
+    elif data == "planes_volver":
+        await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
+
+    elif data == "plan_pro":
+        texto = get_plan_pro_text()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💸 Pagar 40 estrellas", callback_data="comprar_plan_pro")],
+            [InlineKeyboardButton("🔙 Volver", callback_data="planes")]
+        ])
+        await query.message.reply_text(texto, parse_mode="Markdown", reply_markup=keyboard)
+
+    elif data == "plan_ultra":
+        texto = get_plan_ultra_text()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💸 Pagar 100 estrellas", callback_data="comprar_plan_ultra")],
+            [InlineKeyboardButton("🔙 Volver", callback_data="planes")]
+        ])
+        await query.message.reply_text(texto, parse_mode="Markdown", reply_markup=keyboard)
+
+    elif data == "comprar_plan_pro":
+        if is_premium(user_id):
+            exp = user_premium[user_id].strftime("%Y-%m-%d")
+            await query.message.reply_text(f"✅ Ya tienes una suscripción activa hasta {exp}.")
+            return
+        await context.bot.send_invoice(
+            chat_id=query.message.chat_id,
+            title=PLAN_PRO_ITEM["title"],
+            description=PLAN_PRO_ITEM["description"],
+            payload=PLAN_PRO_ITEM["payload"],
+            provider_token=PROVIDER_TOKEN,
+            currency=PLAN_PRO_ITEM["currency"],
+            prices=PLAN_PRO_ITEM["prices"],
+            start_parameter="buy-plan-pro"
         )
+
+    elif data == "comprar_plan_ultra":
+        if is_premium(user_id):
+            exp = user_premium[user_id].strftime("%Y-%m-%d")
+            await query.message.reply_text(f"✅ Ya tienes una suscripción activa hasta {exp}.")
+            return
+        await context.bot.send_invoice(
+            chat_id=query.message.chat_id,
+            title=PLAN_ULTRA_ITEM["title"],
+            description=PLAN_ULTRA_ITEM["description"],
+            payload=PLAN_ULTRA_ITEM["payload"],
+            provider_token=PROVIDER_TOKEN,
+            currency=PLAN_ULTRA_ITEM["currency"],
+            prices=PLAN_ULTRA_ITEM["prices"],
+            start_parameter="buy-plan-ultra"
+        )
+
     elif data == "comprar":
         if is_premium(user_id):
             exp = user_premium[user_id].strftime("%Y-%m-%d")
@@ -208,6 +322,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prices=PREMIUM_ITEM["prices"],
             start_parameter="buy-premium"
         )
+
     elif data == "perfil":
         plan = "Premium" if is_premium(user_id) else "Free"
         exp = user_premium.get(user_id)
@@ -217,15 +332,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]])
         )
 
+    # Botones para los nuevos menús del main
+    elif data == "audio_libros":
+        await query.message.reply_text("🎧 Aquí están los Audio Libros disponibles. (Implementa contenido o botones aquí.)",
+                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]))
+    elif data == "libro_pdf":
+        await query.message.reply_text("📚 Aquí están los Libros PDF disponibles. (Implementa contenido o botones aquí.)",
+                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]))
+    elif data == "chat_pedido":
+        await query.message.reply_text("💬 Chat para hacer pedidos o consultas. (Implementa aquí.)",
+                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]))
+    elif data == "cursos":
+        await query.message.reply_text("🎓 Cursos disponibles. (Implementa contenido o botones aquí.)",
+                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]))
+
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
 
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if update.message.successful_payment.invoice_payload == PREMIUM_ITEM["payload"]:
+    payload = update.message.successful_payment.invoice_payload
+    if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
         user_premium[user_id] = datetime.utcnow() + timedelta(days=30)
         save_data()
-        await update.message.reply_text("🎉 ¡Gracias por tu compra! Premium activado por 30 días.")
+        await update.message.reply_text("🎉 ¡Gracias por tu compra! Suscripción activada por 30 días.")
 
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -240,108 +370,4 @@ async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("❌ Envía una imagen con sinopsis.")
 
 async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    user_id = msg.from_user.id
-    if user_id not in current_photo:
-        await msg.reply_text("❌ Primero envía una sinopsis con imagen.")
-        return
-
-    pkg_id = str(int(datetime.utcnow().timestamp()))
-    content_packages[pkg_id] = {
-        "photo_id": current_photo[user_id]["photo_id"],
-        "caption": current_photo[user_id]["caption"],
-        "video_id": msg.video.file_id
-    }
-    del current_photo[user_id]
-    save_data()
-
-    boton = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Ver video completo", url=f"https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}")]])
-    for chat_id in known_chats:
-        try:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=content_packages[pkg_id]["photo_id"],
-                caption=content_packages[pkg_id]["caption"],
-                reply_markup=boton,
-                protect_content=True
-            )
-        except Exception as e:
-            logger.warning(f"No se pudo enviar a {chat_id}: {e}")
-
-    await msg.reply_text("✅ Contenido enviado a los grupos.")
-
-async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat.type in ['group', 'supergroup']:
-        if chat.id not in known_chats:
-            known_chats.add(chat.id)
-            save_data()
-            logger.info(f"Grupo registrado: {chat.id}")
-
-# --- WEBHOOK HANDLER para aiohttp --- #
-async def webhook_handler(request):
-    data = await request.json()
-    update = Update.de_json(data, app_telegram.bot)
-    await app_telegram.update_queue.put(update)
-    return web.Response(text="OK")
-
-async def on_startup(app):
-    webhook_url = f"{APP_URL}/webhook"
-    await app_telegram.bot.set_webhook(webhook_url)
-    logger.info(f"Webhook configurado en {webhook_url}")
-
-async def on_shutdown(app):
-    await app_telegram.bot.delete_webhook()
-    logger.info("Webhook eliminado")
-
-# --- CREACIÓN DE APP Telegram --- #
-app_telegram = Application.builder().token(TOKEN).build()
-
-# Agregar handlers
-app_telegram.add_handler(CommandHandler("start", start))
-app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-app_telegram.add_handler(CallbackQueryHandler(handle_callback))
-app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
-app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
-
-# --- CONFIGURACIÓN aiohttp SERVER --- #
-web_app = web.Application()
-web_app.router.add_post("/webhook", webhook_handler)
-web_app.on_startup.append(on_startup)
-web_app.on_shutdown.append(on_shutdown)
-
-async def main():
-    load_data()
-    logger.info("🤖 Bot iniciado con webhook")
-
-    # Inicializar la app Telegram
-    await app_telegram.initialize()
-    await app_telegram.start()
-
-    # Levantar servidor aiohttp
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-
-    logger.info(f"Servidor webhook corriendo en puerto {PORT}")
-
-    # Mantener la app corriendo
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Deteniendo bot...")
-    finally:
-        await app_telegram.stop()
-        await app_telegram.shutdown()
-        await runner.cleanup()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
 
