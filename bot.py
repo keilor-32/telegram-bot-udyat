@@ -20,7 +20,7 @@ APP_URL = os.getenv("APP_URL")  # Ejemplo: https://telegram-bot-udyat.onrender.c
 PORT = int(os.getenv("PORT", "8080"))
 
 
-DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASS = os.getenv("DB_PASS", "")
 DB_NAME = os.getenv("DB_NAME", "telegram_bot")
