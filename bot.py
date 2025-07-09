@@ -23,9 +23,9 @@ if not TOKEN:
 if not APP_URL:
     raise ValueError("❌ ERROR: La variable de entorno APP_URL no está configurada.")
 
-# Solo verificamos suscripción a este canal público
 CHANNELS = {
-    'canal1': '@Jhonmaxs'
+    'supertvw2': '@Supertvw2',
+    'fullvvd': '@fullvvd'
 }
 
 FREE_LIMIT_VIDEOS = 3  # Free: 3 vistas por día
@@ -114,23 +114,19 @@ def register_view(user_id):
     user_daily_views[uid][today] = user_daily_views[uid].get(today, 0) + 1
     save_data()
 
-# --- Botones de verificación (con los enlaces nuevos) ---
-verificacion_markup = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🔗 Unirse al Canal Privado 1", url="https://t.me/+rzFyi_cr_T1kNTAx")],
-    [InlineKeyboardButton("🔗 Unirse a Jhonmaxs", url="https://t.me/Jhonmaxs")],
-    [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")]
-])
-
-# --- Menú principal con enlaces personalizados y botón info ---
+# --- Aquí se añade el menú principal con los 4 botones pedidos ---
 def get_main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 Películas", url="https://t.me/+dVTzx8dMGf81NTcx"),
-         InlineKeyboardButton("📺 Series", url="https://t.me/+qiFtv2EmV-xmNWFh")],
-        [InlineKeyboardButton("🎧 Audio libros", url="https://t.me/+3lDaURwlx-g4NWJk"),
-         InlineKeyboardButton("📚 Libros en PDF", url="https://t.me/+iJ5D1VLCAW5hYzhk")],
-        [InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
-         InlineKeyboardButton("🆘 Soporte", url="https://t.me/Hsito")],
-        [InlineKeyboardButton("ℹ️ Info", callback_data="info")]
+        [InlineKeyboardButton("🎧 Audio Libros", callback_data="audio_libros"),
+         InlineKeyboardButton("📚 Libro PDF", callback_data="libro_pdf")],
+        [InlineKeyboardButton("💬 Chat Pedido", callback_data="chat_pedido"),
+         InlineKeyboardButton("🎓 Cursos", callback_data="cursos")],
+        [InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
+         InlineKeyboardButton("👥 Grupo", url="https://t.me/udyat_channel")],
+        [InlineKeyboardButton("💎 Planes", callback_data="planes"),
+         InlineKeyboardButton("🧑 Perfil", callback_data="perfil")],
+        [InlineKeyboardButton("ℹ️ Info", callback_data="info"),
+         InlineKeyboardButton("❓ Ayuda", callback_data="ayuda")]
     ])
 
 # --- HANDLERS --- #
@@ -145,19 +141,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Video no disponible.")
             return
 
-        # Verificar suscripción solo a @Jhonmaxs
-        try:
-            member = await context.bot.get_chat_member(chat_id=CHANNELS['canal1'], user_id=user_id)
-            if member.status not in ['member', 'administrator', 'creator']:
-                await update.message.reply_text(
-                    "🔒 Para ver este contenido debes unirte a los canales.",
-                    reply_markup=verificacion_markup
-                )
+        for name, username in CHANNELS.items():
+            try:
+                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+                if member.status not in ['member', 'administrator', 'creator']:
+                    await update.message.reply_text(
+                        "🔒 Para ver este contenido debes unirte a los canales.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
+                            [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
+                            [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")]
+                        ])
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"Error verificando canal: {e}")
+                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
                 return
-        except Exception as e:
-            logger.warning(f"Error verificando canal: {e}")
-            await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
-            return
 
         if can_view_video(user_id):
             register_view(user_id)
@@ -176,7 +176,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
-            reply_markup=verificacion_markup
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
+                [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
+                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")]
+            ])
         )
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,19 +188,14 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user_id = query.from_user.id
     not_joined = []
-
-    # No se puede verificar automáticamente el canal privado (link sin username)
-    not_joined.append("https://t.me/+rzFyi_cr_T1kNTAx (confirma manualmente)")
-
-    # Verificar suscripción a @Jhonmaxs
-    try:
-        member = await context.bot.get_chat_member(chat_id=CHANNELS['canal1'], user_id=user_id)
-        if member.status not in ['member', 'administrator', 'creator']:
-            not_joined.append("@Jhonmaxs")
-    except:
-        not_joined.append("@Jhonmaxs")
-
-    if not not_joined or (len(not_joined) == 1 and "confirma manualmente" in not_joined[0]):
+    for name, username in CHANNELS.items():
+        try:
+            member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+            if member.status not in ['member', 'administrator', 'creator']:
+                not_joined.append(username)
+        except:
+            not_joined.append(username)
+    if not not_joined:
         await query.edit_message_text("✅ Verificación completada. Menú disponible:")
         await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
     else:
@@ -238,7 +237,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
             return
         await context.bot.send_invoice(
-            chat_id=query.message.chat.id,
+            chat_id=query.message.chat_id,
             title=PLAN_PRO_ITEM["title"],
             description=PLAN_PRO_ITEM["description"],
             payload=PLAN_PRO_ITEM["payload"],
@@ -254,7 +253,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
             return
         await context.bot.send_invoice(
-            chat_id=query.message.chat.id,
+            chat_id=query.message.chat_id,
             title=PLAN_ULTRA_ITEM["title"],
             description=PLAN_ULTRA_ITEM["description"],
             payload=PLAN_ULTRA_ITEM["payload"],
@@ -284,8 +283,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("💬 Aquí puedes hacer tu pedido en el chat.")
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
-    elif data == "info":
-        await query.message.reply_text("ℹ️ Información del bot y ayuda aquí.")
 
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
@@ -373,7 +370,7 @@ app_telegram.add_handler(CommandHandler("start", start))
 app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
 app_telegram.add_handler(CallbackQueryHandler(handle_callback))
 app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-app_telegram.add_handler(MessageHandler(filters.StatusUpdate.SUCCESSFUL_PAYMENT, successful_payment))
+app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
@@ -412,5 +409,7 @@ async def main():
         await runner.cleanup()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())  ese es mi codigo anterior 
+
+
 
