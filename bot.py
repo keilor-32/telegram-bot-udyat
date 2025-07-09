@@ -30,6 +30,14 @@ if not TOKEN:
 if not APP_URL:
     raise ValueError("❌ ERROR: La variable de entorno APP_URL no está configurada.")
 
+
+def get_db():
+    return mysql.connector.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASS,
+        database=DB_NAME
+    )
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
