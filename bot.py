@@ -19,7 +19,8 @@ PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")  # Se lee de variable entorno
 APP_URL = os.getenv("APP_URL")  # Ejemplo: https://telegram-bot-udyat.onrender.com
 PORT = int(os.getenv("PORT", "8080"))
 
-DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
+
+DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASS = os.getenv("DB_PASS", "")
 DB_NAME = os.getenv("DB_NAME", "telegram_bot")
