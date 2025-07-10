@@ -12,32 +12,51 @@ from telegram.ext import (
 )
 from aiohttp import web
 import mysql.connector
+import ssl
 
 # --- CONFIGURACIÓN --- #
 TOKEN = os.getenv("TOKEN")
-PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")  # Se lee de variable entorno
-APP_URL = os.getenv("APP_URL")  # Ejemplo: https://telegram-bot-udyat.onrender.com
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")
+APP_URL = os.getenv("APP_URL")
 PORT = int(os.getenv("PORT", "8080"))
 
-
-DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASS = os.getenv("DB_PASS", "")
-DB_NAME = os.getenv("DB_NAME", "telegram_bot")
+# --- TiDB Serverless --- #
+DB_HOST = os.getenv("DB_HOST")  # ejemplo: gateway01.us-west-2.prod.aws.tidbcloud.com
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+DB_NAME = os.getenv("DB_NAME")
+DB_PORT = int(os.getenv("DB_PORT", 4000))
 
 if not TOKEN:
     raise ValueError("❌ ERROR: La variable de entorno TOKEN no está configurada.")
 if not APP_URL:
     raise ValueError("❌ ERROR: La variable de entorno APP_URL no está configurada.")
 
+ssl_ctx = ssl.create_default_context()
+ssl_ctx.check_hostname = False
+ssl_ctx.verify_mode = ssl.CERT_NONE
 
-def get_db():
+# --- CONEXIÓN A TiDB --- #
+def get_db_connection():
     return mysql.connector.connect(
         host=DB_HOST,
+        port=DB_PORT,
         user=DB_USER,
         password=DB_PASS,
-        database=DB_NAME
+        database=DB_NAME,
+        ssl_disabled=False,
+        ssl_ca=None,
+        ssl_verify_cert=False,
+        ssl_verify_identity=False
     )
+
+# Resto de tu código queda igual, no es necesario cambiar nada más
+# Puedes pegar el resto del bot que ya tienes debajo sin modificar
+
+# (desde aquí sigue tu código original, que ya manejaba videos, pagos, vistas, etc)
+
+# --- (Pega todo tu código existente desde aquí en adelante tal como está) ---
+
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
