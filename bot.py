@@ -23,10 +23,10 @@ if not TOKEN:
 if not APP_URL:
     raise ValueError("❌ ERROR: La variable de entorno APP_URL no está configurada.")
 
-# --- ARCHIVOS --- #
-USER_PREMIUM_FILE = "user_premium.json"
+# --- Archivos JSON para persistencia --- #
 USER_VIEWS_FILE = "user_views.json"
 KNOWN_CHATS_FILE = "known_chats.json"
+USER_PREMIUM_FILE = "user_premium.json"
 VIDEOS_FILE = "videos.json"
 
 # --- LOGGING --- #
@@ -34,13 +34,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- VARIABLES EN MEMORIA --- #
-user_premium = {}          # {user_id: expire_at ISO str}
+user_premium = {}          # {user_id: expire_at datetime}
 user_daily_views = {}      # {user_id: {date: count}}
 content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
 current_photo = {}
 
-# --- FUNCIONES PARA JSON --- #
+# --- FUNCIONES JSON --- #
 def save_json(filename, data):
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -51,64 +51,70 @@ def load_json(filename):
     with open(filename, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_data():
-    # Guardamos todo en JSON
-    save_json(USER_PREMIUM_FILE, {str(k): v for k, v in user_premium.items()})
-    save_json(USER_VIEWS_FILE, user_daily_views)
-    save_json(KNOWN_CHATS_FILE, list(known_chats))
+# --- Carga y guarda usuarios premium (con conversión datetime) --- #
+def save_user_premium_json():
+    data = {str(uid): exp.strftime("%Y-%m-%dT%H:%M:%S") for uid, exp in user_premium.items()}
+    save_json(USER_PREMIUM_FILE, data)
+
+def load_user_premium_json():
+    data = load_json(USER_PREMIUM_FILE)
+    result = {}
+    for uid, exp_str in data.items():
+        try:
+            result[int(uid)] = datetime.fromisoformat(exp_str)
+        except:
+            pass
+    return result
+
+# --- Carga y guarda videos --- #
+def save_videos_json():
     save_json(VIDEOS_FILE, content_packages)
 
-def load_data():
-    global user_premium, content_packages, user_daily_views, known_chats
+def load_videos_json():
+    return load_json(VIDEOS_FILE)
 
-    user_premium_raw = load_json(USER_PREMIUM_FILE)
-    # Convertir string fechas ISO a datetime
-    user_premium = {int(k): datetime.fromisoformat(v) for k, v in user_premium_raw.items()}
-
-    content_packages = load_json(VIDEOS_FILE)
-    user_daily_views = load_json(USER_VIEWS_FILE)
-    known_chats = set(load_json(KNOWN_CHATS_FILE))
-
-# --- FUNCIONES PARA USUARIOS PREMIUM --- #
-def save_user_premium(user_id: int, expire_at: datetime):
-    user_premium[user_id] = expire_at
-    save_data()
-
-def is_premium(user_id):
-    return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
-
-# --- FUNCIONES PARA VIDEOS --- #
-def save_video(pkg_id: str, photo_id: str, caption: str, video_id: str):
-    content_packages[pkg_id] = {
-        "photo_id": photo_id,
-        "caption": caption,
-        "video_id": video_id
-    }
-    save_data()
-# --- FUNCIONES DE GUARDADO/LECTURA DE DATOS --- #
-def save_json(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-
-def load_json(filename):
-    if not os.path.exists(filename):
-        return {}
-    with open(filename, "r", encoding="utf-8") as f:
-        return json.load(f)
-
+# --- Guarda y carga todo --- #
 def save_data():
-    # user_premium y content_packages ya guardan directo a DB, sólo guardamos lo que queda en JSON
+    save_user_premium_json()
+    save_videos_json()
     save_json(USER_VIEWS_FILE, user_daily_views)
     save_json(KNOWN_CHATS_FILE, list(known_chats))
 
 def load_data():
     global user_premium, content_packages, user_daily_views, known_chats
-    user_premium = load_user_premium()
-    content_packages = load_videos()
+    user_premium = load_user_premium_json()
+    content_packages = load_videos_json()
     user_daily_views = load_json(USER_VIEWS_FILE)
     known_chats = set(load_json(KNOWN_CHATS_FILE))
 
-# --- UTILIDADES --- #
+# --- Variables para planes --- #
+FREE_LIMIT_VIDEOS = 3
+
+PREMIUM_ITEM = {
+    "title": "Plan Premium",
+    "description": "Acceso y reenvíos ilimitados por 30 días.",
+    "payload": "premium_plan",
+    "currency": "XTR",
+    "prices": [LabeledPrice("Premium por 30 días", 1)]
+}
+
+PLAN_PRO_ITEM = {
+    "title": "Plan Pro",
+    "description": "50 videos diarios, sin reenvíos ni compartir.",
+    "payload": "plan_pro",
+    "currency": "XTR",
+    "prices": [LabeledPrice("Plan Pro por 30 días", 40)]
+}
+
+PLAN_ULTRA_ITEM = {
+    "title": "Plan Ultra",
+    "description": "Videos y reenvíos ilimitados, sin restricciones.",
+    "payload": "plan_ultra",
+    "currency": "XTR",
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)]
+}
+
+# --- Funciones de control --- #
 def is_premium(user_id):
     return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
 
@@ -126,7 +132,13 @@ def register_view(user_id):
     user_daily_views[uid][today] = user_daily_views[uid].get(today, 0) + 1
     save_data()
 
-# --- Menú principal con botones pedidos --- #
+# --- Ejemplo canales para verificación --- #
+CHANNELS = {
+    'supertvw2': '@Supertvw2',
+    'fullvvd': '@fullvvd'
+}
+
+# --- Menú principal --- #
 def get_main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎧 Audio Libros", callback_data="audio_libros"),
@@ -142,6 +154,7 @@ def get_main_menu():
     ])
 
 # --- HANDLERS --- #
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
@@ -153,6 +166,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Video no disponible.")
             return
 
+        # Verifica suscripción a canales
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -176,7 +190,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(
                 video=pkg["video_id"],
                 caption="🎬 Aquí tienes el video completo.",
-                protect_content=not is_premium(user_id)  # Premium pueden reenviar
+                protect_content=not is_premium(user_id)
             )
         else:
             await update.message.reply_text(
@@ -237,11 +251,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")]
         ])
         await query.message.reply_text(texto_planes, parse_mode="Markdown", reply_markup=botones_planes)
-
-    elif data == "comprar":
-        await query.message.reply_text("Por favor elige un plan en el menú:", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Ver planes", callback_data="planes")]
-        ]))
 
     elif data == "comprar_pro":
         if is_premium(user_id):
@@ -305,7 +314,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
         expire_at = datetime.utcnow() + timedelta(days=30)
         user_premium[user_id] = expire_at
-        save_user_premium(user_id, expire_at)
+        save_user_premium_json()
         save_data()
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
 
@@ -340,7 +349,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     del current_photo[user_id]
 
-    save_video(pkg_id, photo_id, caption, video_id)
+    save_videos_json()
     save_data()
 
     boton = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Ver video completo", url=f"https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}")]])
@@ -377,6 +386,7 @@ async def on_startup(app):
     webhook_url = f"{APP_URL}/webhook"
     await app_telegram.bot.set_webhook(webhook_url)
     logger.info(f"Webhook configurado en {webhook_url}")
+
 async def on_shutdown(app):
     await app_telegram.bot.delete_webhook()
     logger.info("Webhook eliminado")
@@ -429,7 +439,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
 
 
 
