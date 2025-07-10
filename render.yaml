@@ -11,6 +11,15 @@ services:
       - key: PROVIDER_TOKEN
         value: ""  # Pon tu provider token si usas pagos, o deja vacío
       - key: APP_URL
-        value: "https://telegram-bot-udyat.onrender.com"  # Cambia a tu URL
-
+        value: "https://telegram-bot-udyat.onrender.com"
+      - key: DB_HOST
+        value: "gateway01.us-west-2.prod.aws.tidbcloud.com"
+      - key: DB_PORT
+        value: "4000"
+      - key: DB_USER
+        value: "33jjemho3AAaJp9.root"
+      - key: DB_PASS
+        value: "FwnoGiGKP06SKK4J"
+      - key: DB_NAME
+        value: "test"
 
