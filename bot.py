@@ -11,8 +11,6 @@ from telegram.ext import (
     filters, PreCheckoutQueryHandler
 )
 from aiohttp import web
-import mysql.connector
-import ssl
 
 # --- CONFIGURACIÓN --- #
 TOKEN = os.getenv("TOKEN")
@@ -20,147 +18,73 @@ PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")
 APP_URL = os.getenv("APP_URL")
 PORT = int(os.getenv("PORT", "8080"))
 
-# --- TiDB Serverless --- #
-DB_HOST = os.getenv("DB_HOST")  # ejemplo: gateway01.us-west-2.prod.aws.tidbcloud.com
-DB_USER = os.getenv("DB_USER")
-DB_PASS = os.getenv("DB_PASS")
-DB_NAME = os.getenv("DB_NAME")
-DB_PORT = int(os.getenv("DB_PORT", 4000))
-
 if not TOKEN:
     raise ValueError("❌ ERROR: La variable de entorno TOKEN no está configurada.")
 if not APP_URL:
     raise ValueError("❌ ERROR: La variable de entorno APP_URL no está configurada.")
 
-ssl_ctx = ssl.create_default_context()
-ssl_ctx.check_hostname = False
-ssl_ctx.verify_mode = ssl.CERT_NONE
-
-# --- CONEXIÓN A TiDB --- #
-def get_db_connection():
-    return mysql.connector.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME,
-        ssl_disabled=False,
-        ssl_ca=None,
-        ssl_verify_cert=False,
-        ssl_verify_identity=False
-    )
-
-# Resto de tu código queda igual, no es necesario cambiar nada más
-# Puedes pegar el resto del bot que ya tienes debajo sin modificar
-
-# (desde aquí sigue tu código original, que ya manejaba videos, pagos, vistas, etc)
-
-# --- (Pega todo tu código existente desde aquí en adelante tal como está) ---
-
-CHANNELS = {
-    'supertvw2': '@Supertvw2',
-    'fullvvd': '@fullvvd'
-}
-
-FREE_LIMIT_VIDEOS = 3  # Free: 3 vistas por día
-
-# Planes con estrellas
-PREMIUM_ITEM = {
-    "title": "Plan Premium",
-    "description": "Acceso y reenvíos ilimitados por 30 días.",
-    "payload": "premium_plan",
-    "currency": "XTR",  # XTR = Telegram Stars
-    "prices": [LabeledPrice("Premium por 30 días", 1)]  # 1 estrella
-}
-
-PLAN_PRO_ITEM = {
-    "title": "Plan Pro",
-    "description": "50 videos diarios, sin reenvíos ni compartir.",
-    "payload": "plan_pro",
-    "currency": "XTR",
-    "prices": [LabeledPrice("Plan Pro por 30 días", 40)]  # 40 estrellas
-}
-
-PLAN_ULTRA_ITEM = {
-    "title": "Plan Ultra",
-    "description": "Videos y reenvíos ilimitados, sin restricciones.",
-    "payload": "plan_ultra",
-    "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)]  # 100 estrellas
-}
-
 # --- ARCHIVOS --- #
+USER_PREMIUM_FILE = "user_premium.json"
 USER_VIEWS_FILE = "user_views.json"
 KNOWN_CHATS_FILE = "known_chats.json"
+VIDEOS_FILE = "videos.json"
 
 # --- LOGGING --- #
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- VARIABLES EN MEMORIA --- #
-user_premium = {}          # {user_id: expire_at datetime} se carga desde MySQL
-user_daily_views = {}      # {user_id: {date: count}} se sigue usando JSON
-content_packages = {}      # {pkg_id: {photo_id, caption, video_id}} se carga desde MySQL
+user_premium = {}          # {user_id: expire_at ISO str}
+user_daily_views = {}      # {user_id: {date: count}}
+content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
 current_photo = {}
 
-# --- CONEXIÓN A MYSQL --- #
-def get_db_connection():
-    return mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME
-    )
+# --- FUNCIONES PARA JSON --- #
+def save_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+def load_json(filename):
+    if not os.path.exists(filename):
+        return {}
+    with open(filename, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data():
+    # Guardamos todo en JSON
+    save_json(USER_PREMIUM_FILE, {str(k): v for k, v in user_premium.items()})
+    save_json(USER_VIEWS_FILE, user_daily_views)
+    save_json(KNOWN_CHATS_FILE, list(known_chats))
+    save_json(VIDEOS_FILE, content_packages)
+
+def load_data():
+    global user_premium, content_packages, user_daily_views, known_chats
+
+    user_premium_raw = load_json(USER_PREMIUM_FILE)
+    # Convertir string fechas ISO a datetime
+    user_premium = {int(k): datetime.fromisoformat(v) for k, v in user_premium_raw.items()}
+
+    content_packages = load_json(VIDEOS_FILE)
+    user_daily_views = load_json(USER_VIEWS_FILE)
+    known_chats = set(load_json(KNOWN_CHATS_FILE))
 
 # --- FUNCIONES PARA USUARIOS PREMIUM --- #
 def save_user_premium(user_id: int, expire_at: datetime):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO premium_users (user_id, expire_at)
-        VALUES (%s, %s)
-        ON DUPLICATE KEY UPDATE expire_at = %s
-    """, (user_id, expire_at, expire_at))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    user_premium[user_id] = expire_at
+    save_data()
 
-def load_user_premium():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, expire_at FROM premium_users")
-    result = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return {user_id: expire_at for (user_id, expire_at) in result}
+def is_premium(user_id):
+    return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
 
 # --- FUNCIONES PARA VIDEOS --- #
 def save_video(pkg_id: str, photo_id: str, caption: str, video_id: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO videos (id, photo_id, caption, video_id, created_at)
-        VALUES (%s, %s, %s, %s, NOW())
-        ON DUPLICATE KEY UPDATE photo_id=%s, caption=%s, video_id=%s
-    """, (pkg_id, photo_id, caption, video_id, photo_id, caption, video_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-def load_videos():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT id, photo_id, caption, video_id FROM videos")
-    rows = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return {row['id']: {
-        "photo_id": row['photo_id'],
-        "caption": row['caption'],
-        "video_id": row['video_id']
-    } for row in rows}
-
+    content_packages[pkg_id] = {
+        "photo_id": photo_id,
+        "caption": caption,
+        "video_id": video_id
+    }
+    save_data()
 # --- FUNCIONES DE GUARDADO/LECTURA DE DATOS --- #
 def save_json(filename, data):
     with open(filename, "w", encoding="utf-8") as f:
