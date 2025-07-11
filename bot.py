@@ -457,7 +457,7 @@ app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, d
 # --- Servidor aiohttp ---
 web_app = web.Application()
 web_app.router.add_post("/webhook", webhook_handler)
-✅ Ruta para monitoreo UptimeRobot
+#Ruta para monitoreo UptimeRobot
 web_app.router.add_get("/ping", 
 lambda request:
      web.Response(text="✅ Bot activo."))
