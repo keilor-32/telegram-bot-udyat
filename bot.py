@@ -3,6 +3,7 @@ import json
 import tempfile
 import logging
 import firebase_admin
+from telegram import LabeledPrice
 from firebase_admin import credentials, firestore
 
 # Paso 1: Obtener la variable de entorno (doblemente serializada)
