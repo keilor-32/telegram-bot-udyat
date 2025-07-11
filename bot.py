@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 import logging
+import asyncio
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
