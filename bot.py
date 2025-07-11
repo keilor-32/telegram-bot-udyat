@@ -8,13 +8,12 @@ google_credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if not google_credentials_json:
     raise ValueError("❌ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
 
-# Crear un archivo temporal con el JSON de credenciales
-with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_cred_file:
-    temp_cred_file.write(google_credentials_json)
-    temp_cred_file.flush()
-    temp_cred_path = temp_cred_file.name
+# Guardar el contenido JSON en un archivo temporal
+with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+    temp_file.write(google_credentials_json)
+    temp_cred_path = temp_file.name  # Ruta al archivo temporal
 
-# Inicializar Firebase con la ruta del archivo temporal
+# Inicializar Firebase Admin con la ruta al archivo JSON temporal
 cred = credentials.Certificate(temp_cred_path)
 firebase_admin.initialize_app(cred)
 
@@ -22,7 +21,6 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 print("✅ Firebase inicializado correctamente.")
-
 
 
 # --- CONFIGURACIÓN ---
