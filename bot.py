@@ -11,12 +11,15 @@ if not google_credentials_json:
 # Convertir el contenido JSON (como string) a diccionario
 cred_dict = json.loads(google_credentials_json)
 
-# Usar el diccionario directamente para inicializar Firebase
-cred = credentials.Certificate(cred_dict)
+# Inicializar Firebase con credenciales desde diccionario
+cred = credentials.Certificate.from_service_account_info(cred_dict)
 firebase_admin.initialize_app(cred)
 
 # Inicializar Firestore
 db = firestore.client()
+
+print("✅ Firebase inicializado correctamente.")
+
 
 # --- CONFIGURACIÓN ---
 TOKEN = os.getenv("TOKEN")
