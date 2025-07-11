@@ -7,19 +7,20 @@ services:
     startCommand: python bot.py
     envVars:
       - key: TOKEN
-        value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
+        value: "TU_TOKEN"
       - key: PROVIDER_TOKEN
-        value: ""  # Pon tu provider token si usas pagos, o deja vacío
+        value: ""
       - key: APP_URL
         value: "https://telegram-bot-udyat.onrender.com"
-      - key: DB_HOST
-        value: "gateway01.us-west-2.prod.aws.tidbcloud.com"
-      - key: DB_PORT
-        value: "4000"
-      - key: DB_USER
-        value: "33jjemho3AAaJp9.root"
-      - key: DB_PASS
-        value: "FwnoGiGKP06SKK4J"
-      - key: DB_NAME
-        value: "test"
+      - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+        value: |-
+          {
+            "type": "service_account",
+            "project_id": "...",
+            "private_key_id": "...",
+            "private_key": "...",
+            "client_email": "...",
+            ...
+          }
+
 
