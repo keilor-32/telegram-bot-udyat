@@ -1,15 +1,18 @@
 import os
 import json
-import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials
 
-# Cargar JSON desde variable de entorno
+# Leer el contenido del JSON desde la variable de entorno
 google_credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if not google_credentials_json:
-    raise ValueError("⚠️ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
+    raise ValueError("❌ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
 
+# Convertir el contenido JSON (como string) a diccionario
 cred_dict = json.loads(google_credentials_json)
+
+# Usar el diccionario directamente para inicializar Firebase
 cred = credentials.Certificate(cred_dict)
+firebase_admin.initialize_app(cred)
 
 # Inicializar Firebase
 firebase_admin.initialize_app(cred)
