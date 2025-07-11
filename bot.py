@@ -3,6 +3,7 @@ import json
 import tempfile
 import logging
 import asyncio
+from datetime import datetime, timedelta
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
@@ -18,33 +19,25 @@ from telegram.ext import (
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Paso 1: Obtener la variable de entorno (doblemente serializada)
+# --- Inicializar Firestore con variable de entorno JSON doblemente serializada ---
 google_credentials_raw = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-
 if not google_credentials_raw:
     raise ValueError("❌ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
 
-# Paso 2: Primera capa de deserialización (quita las comillas escapadas)
-google_credentials_str = json.loads(google_credentials_raw)  # ahora es un string JSON
-
-# Paso 3: Segunda capa, convierte string JSON a dict
+google_credentials_str = json.loads(google_credentials_raw)
 google_credentials_dict = json.loads(google_credentials_str)
 
-# Paso 4: Crear archivo temporal con el diccionario válido
 with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as temp:
     json.dump(google_credentials_dict, temp)
     temp_path = temp.name
 
-# Paso 5: Inicializar Firebase
 cred = credentials.Certificate(temp_path)
 firebase_admin.initialize_app(cred)
-
-# Paso 6: Inicializar Firestore
 db = firestore.client()
 
 print("✅ Firestore inicializado correctamente.")
 
-# --- CONFIGURACIÓN ---
+# --- Configuración ---
 TOKEN = os.getenv("TOKEN")
 PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")
 APP_URL = os.getenv("APP_URL")
@@ -55,36 +48,35 @@ if not TOKEN:
 if not APP_URL:
     raise ValueError("❌ ERROR: La variable de entorno APP_URL no está configurada.")
 
-# --- LOGGING ---
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- VARIABLES EN MEMORIA ---
+# --- Variables en memoria ---
 user_premium = {}          # {user_id: expire_at datetime}
 user_daily_views = {}      # {user_id: {date: count}}
 content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
 current_photo = {}
 
-# --- FUNCIONES FIRESTORE ---
-
-# Colecciones
+# --- Firestore colecciones ---
 COLLECTION_USERS = "users_premium"
 COLLECTION_VIDEOS = "videos"
 COLLECTION_VIEWS = "user_daily_views"
 COLLECTION_CHATS = "known_chats"
 
-async def save_user_premium_firestore():
+# --- Funciones Firestore (Síncronas) ---
+def save_user_premium_firestore():
     batch = db.batch()
     for uid, exp in user_premium.items():
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
         batch.set(doc_ref, {"expire_at": exp.isoformat()})
     batch.commit()
 
-async def load_user_premium_firestore():
+def load_user_premium_firestore():
     docs = db.collection(COLLECTION_USERS).stream()
     result = {}
-    async for doc in docs:
+    for doc in docs:
         data = doc.to_dict()
         try:
             expire_at = datetime.fromisoformat(data.get("expire_at"))
@@ -93,39 +85,39 @@ async def load_user_premium_firestore():
             pass
     return result
 
-async def save_videos_firestore():
+def save_videos_firestore():
     batch = db.batch()
     for pkg_id, content in content_packages.items():
         doc_ref = db.collection(COLLECTION_VIDEOS).document(pkg_id)
         batch.set(doc_ref, content)
     batch.commit()
 
-async def load_videos_firestore():
+def load_videos_firestore():
     docs = db.collection(COLLECTION_VIDEOS).stream()
     result = {}
-    async for doc in docs:
+    for doc in docs:
         result[doc.id] = doc.to_dict()
     return result
 
-async def save_user_daily_views_firestore():
+def save_user_daily_views_firestore():
     batch = db.batch()
     for uid, views in user_daily_views.items():
         doc_ref = db.collection(COLLECTION_VIEWS).document(uid)
         batch.set(doc_ref, views)
     batch.commit()
 
-async def load_user_daily_views_firestore():
+def load_user_daily_views_firestore():
     docs = db.collection(COLLECTION_VIEWS).stream()
     result = {}
-    async for doc in docs:
+    for doc in docs:
         result[doc.id] = doc.to_dict()
     return result
 
-async def save_known_chats_firestore():
+def save_known_chats_firestore():
     doc_ref = db.collection(COLLECTION_CHATS).document("chats")
     doc_ref.set({"chat_ids": list(known_chats)})
 
-async def load_known_chats_firestore():
+def load_known_chats_firestore():
     doc_ref = db.collection(COLLECTION_CHATS).document("chats")
     doc = doc_ref.get()
     if doc.exists:
@@ -133,22 +125,21 @@ async def load_known_chats_firestore():
         return set(data.get("chat_ids", []))
     return set()
 
-# --- Funciones para guardar y cargar todo ---
+# --- Guardar y cargar todo ---
+def save_data():
+    save_user_premium_firestore()
+    save_videos_firestore()
+    save_user_daily_views_firestore()
+    save_known_chats_firestore()
 
-async def save_data():
-    await save_user_premium_firestore()
-    await save_videos_firestore()
-    await save_user_daily_views_firestore()
-    await save_known_chats_firestore()
-
-async def load_data():
+def load_data():
     global user_premium, content_packages, user_daily_views, known_chats
-    user_premium = await load_user_premium_firestore()
-    content_packages = await load_videos_firestore()
-    user_daily_views = await load_user_daily_views_firestore()
-    known_chats = await load_known_chats_firestore()
+    user_premium = load_user_premium_firestore()
+    content_packages = load_videos_firestore()
+    user_daily_views = load_user_daily_views_firestore()
+    known_chats = load_known_chats_firestore()
 
-# --- Variables para planes ---
+# --- Planes ---
 FREE_LIMIT_VIDEOS = 3
 
 PREMIUM_ITEM = {
@@ -175,7 +166,7 @@ PLAN_ULTRA_ITEM = {
     "prices": [LabeledPrice("Plan Ultra por 30 días", 100)]
 }
 
-# --- Funciones de control ---
+# --- Control acceso ---
 def is_premium(user_id):
     return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
 
@@ -191,9 +182,9 @@ async def register_view(user_id):
     if uid not in user_daily_views:
         user_daily_views[uid] = {}
     user_daily_views[uid][today] = user_daily_views[uid].get(today, 0) + 1
-    await save_data()
+    save_data()
 
-# --- Ejemplo canales para verificación ---
+# --- Canales para verificación ---
 CHANNELS = {
     'supertvw2': '@Supertvw2',
     'fullvvd': '@fullvvd'
@@ -214,7 +205,7 @@ def get_main_menu():
          InlineKeyboardButton("❓ Ayuda", callback_data="ayuda")]
     ])
 
-# --- HANDLERS ---
+# --- Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -375,7 +366,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
         expire_at = datetime.utcnow() + timedelta(days=30)
         user_premium[user_id] = expire_at
-        await save_data()
+        save_data()
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
 
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -409,7 +400,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     del current_photo[user_id]
 
-    await save_data()
+    save_data()
 
     boton = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Ver video completo", url=f"https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}")]])
     for chat_id in known_chats:
@@ -431,10 +422,10 @@ async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type in ['group', 'supergroup']:
         if chat.id not in known_chats:
             known_chats.add(chat.id)
-            await save_data()
+            save_data()
             logger.info(f"Grupo registrado: {chat.id}")
 
-# --- WEBHOOK HANDLER para aiohttp ---
+# --- WEBHOOK aiohttp ---
 async def webhook_handler(request):
     data = await request.json()
     update = Update.de_json(data, app_telegram.bot)
@@ -450,7 +441,7 @@ async def on_shutdown(app):
     await app_telegram.bot.delete_webhook()
     logger.info("Webhook eliminado")
 
-# --- CREACIÓN DE APP Telegram ---
+# --- App Telegram ---
 app_telegram = Application.builder().token(TOKEN).build()
 
 # Agregar handlers
@@ -463,34 +454,33 @@ app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE
 app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
 
-# --- CONFIGURACIÓN aiohttp SERVER ---
+# --- Servidor aiohttp ---
 web_app = web.Application()
 web_app.router.add_post("/webhook", webhook_handler)
 web_app.on_startup.append(on_startup)
 web_app.on_shutdown.append(on_shutdown)
 
 async def main():
-    await load_data()
+    load_data()
     logger.info("🤖 Bot iniciado con webhook")
 
-    # Inicializar la app Telegram
+    # Inicializar la app de Telegram
     await app_telegram.initialize()
     await app_telegram.start()
 
-    # Levantar servidor aiohttp
+    # Iniciar el servidor aiohttp
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-
-    logger.info(f"Servidor webhook corriendo en puerto {PORT}")
+    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
 
     # Mantener la app corriendo
     try:
         while True:
             await asyncio.sleep(3600)
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Deteniendo bot...")
+        logger.info("🛑 Deteniendo bot...")
     finally:
         await app_telegram.stop()
         await app_telegram.shutdown()
@@ -498,5 +488,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
