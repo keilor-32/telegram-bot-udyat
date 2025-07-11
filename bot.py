@@ -1,6 +1,7 @@
 import os
 import json
-from firebase_admin import credentials
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # Leer el contenido del JSON desde la variable de entorno
 google_credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -14,8 +15,7 @@ cred_dict = json.loads(google_credentials_json)
 cred = credentials.Certificate(cred_dict)
 firebase_admin.initialize_app(cred)
 
-# Inicializar Firebase
-firebase_admin.initialize_app(cred)
+# Inicializar Firestore
 db = firestore.client()
 
 # --- CONFIGURACIÓN ---
