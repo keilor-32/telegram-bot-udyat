@@ -7,7 +7,7 @@ services:
     startCommand: python bot.py
     envVars:
       - key: TOKEN
-        value: "TU_TOKEN"
+        value: "8139687252:AAF16ffsjmrlwNuZ2yoULQ3BZWXhh7Vb91g"
       - key: PROVIDER_TOKEN
         value: ""
       - key: APP_URL
@@ -16,11 +16,16 @@ services:
         value: |-
           {
             "type": "service_account",
-            "project_id": "...",
-            "private_key_id": "...",
-            "private_key": "...",
-            "client_email": "...",
-            ...
+            "project_id": "telegram-bot-13a83",
+            "private_key_id": "ee0bb895f252f74dbd5b1ec09e2a68eb91b64836",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDaT1K+8GMIbQjQ\nyQYpeniefbQno31g85eQsgt6MQZxcvACJHVpwBHp7wD88yhK9viCdQWoB3q5XWQx\nJ61Z4GZX1LPLhSTYT1PhHXy2vp3eT8yGK7ZRS6Io0itwz8OKH+CNqC1VqKCawtIl\nEXQlXJZfiCvVkt/1F+/aMYm8Nn+zk6zDBU/S6MZ1gqRK5Kp77/QCTRM1o+Qa98r6\nc/WelRfSptQUUe1eupPUetPMAyzJeDxEOVIH3Ke9SIzGo5yBbGBLUj+sxAnsNi9g\n40BSINc+FUAuoxsMcGLJIS+cWWOTwIXppCuyUnIIrCGg2UKG90cOWepEvOOHLdoW\nbVr9w4dBAgMBAAECggEAB7gU3BbwamHpBvFQQYUXBGefVmSTxbkZBHYiu2wNH/5b\nBEd8vVH/cCfR4vUdZ3Gcb4gAEgihOWs6jvlGWGBCziKPt87L5KnkgsLQGOncMJaI\n9p+IRp19EGmqA+Nq+/gFzRquRJIop5yqb6XgurzL9lxyTFXjGa27KW+B+d0zrJ+Z\ncWRAtZ65Zajhm1vRmyQSz9RpuV7JqgmoW/ZVfpbm3rc7gdSftiwOcj2w5uJWChTS\nHaxsV3GZugYMmnLHjrUgY2FxlY5YHP+e4Q78mMde8DiLbZ48FgYGvAV2U1YoqzR+\nsBlpBdeOvjcGD/jMyGXHDolqFuNdaQcdB4xH/R58RwKBgQDxvyTR8zkFJDVY+Jp+\nQssUTp60GeNO1WyoN2HASTOf7scWLvt8wdt+FWNnodYliRx+nbN60BKq7wdQuoFs\nLq+lOBMPXjjr28sjjBMf9R7/6Kj6cdmwfViT8xUPy6clBNsL6Zfe2U81pkpv8ync\nhxIyCD58qFP3QGUbe4TnmPIIiwKBgQDnLm5RRLd0rfcjPec0LPpoY0xkpNAc+/gB\n6c1ApByDHvj/VS22jzwr0IsnPSH+1wScI/l5n7oyBbHeHqzuh+wxijKBpY/vYBfv\nEEgPWgJxdC3/WOTMKL6SQpqGPCiw2MYAz8QZCChui+JovDDghk4Oanhg5DLhWGJB\nN5mhGrxc4wKBgAU+zn+3tU8FQBsUGdYPgPSJ2Cu0PBhjzR3BRd+0NuiLd8plbpOA\naVDNCgEfo9Pgq7ublF9f0GfhE9mOkmxUfv8ovlEhDD8h38B/s5KH8QpAdBorCjwo\nHBnptlVHZ/MHrfEOOntdX7icSRUww4HDdIOdZi2yQVAmF4uHHJUh3m6NAoGBAKN/\n1Qmo/c6JkrXb+/6MqPTW9Zpgbcdx9K71ufIznu6lIxkCFvh8SOP7885mj/p5+4qq\nbrAz5S2nlWowa8GvY76NrLbAbxGu9n5fF3e0AvJWZomnRvmU/2LVtA+n0GdyiGbe\niiPh/yZfzFqibjb9BYtwhX6RJeL17VeOiRrFm95dAoGAUffeaxmyEpwKUPSQSs/d\nGlZgqLN6QUCC4/S1u8deHeMl0mGCJXh2ostc0zT6GnGGOO4aI6sqUNJf2ym5m2KU\nJmxfMnLjiwELTrVySretkRrO+/jFhOjG3s6IYkHpOzzo8wuVAfJAK3nzHYBP+bkL\nGttq/RlxFtDOj5i5dUTJ3sI=\n-----END PRIVATE KEY-----\n",
+            "client_email": "firebase-adminsdk-fbsvc@telegram-bot-13a83.iam.gserviceaccount.com",
+            "client_id": "102662666436580541879",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40telegram-bot-13a83.iam.gserviceaccount.com",
+            "universe_domain": "googleapis.com"
           }
 
 
