@@ -1,25 +1,17 @@
-import logging
 import os
 import json
-import asyncio
-from datetime import datetime, timedelta
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
-)
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes,
-    filters, PreCheckoutQueryHandler
-)
-from aiohttp import web
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# --- Inicializar Firebase Firestore ---
+# Cargar JSON desde variable de entorno
 google_credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if not google_credentials_json:
-    raise ValueError("❌ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
+    raise ValueError("⚠️ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
 
-cred = credentials.Certificate(json.loads(google_credentials_json))
+cred_dict = json.loads(google_credentials_json)
+cred = credentials.Certificate(cred_dict)
+
+# Inicializar Firebase
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
