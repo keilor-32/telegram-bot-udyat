@@ -11,6 +11,16 @@ from telegram.ext import (
     filters, PreCheckoutQueryHandler
 )
 from aiohttp import web
+import firebase_admin
+from firebase_admin import credentials
+
+# Inicializar Firebase con credenciales desde variable de entorno
+google_credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if not google_credentials_json:
+    raise ValueError("❌ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
+
+cred = credentials.Certificate(json.loads(google_credentials_json))
+firebase_admin.initialize_app(cred)
 
 # --- CONFIGURACIÓN --- #
 TOKEN = os.getenv("TOKEN")
