@@ -2,8 +2,19 @@ import os
 import json
 import tempfile
 import logging
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    PreCheckoutQueryHandler,
+    filters
+)
+
 import firebase_admin
-from telegram import LabeledPrice
 from firebase_admin import credentials, firestore
 
 # Paso 1: Obtener la variable de entorno (doblemente serializada)
