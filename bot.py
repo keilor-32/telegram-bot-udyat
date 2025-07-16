@@ -168,7 +168,7 @@ def load_data():
     series_data = load_series_firestore()  # NUEVO
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 3
+FREE_LIMIT_VIDEOS = 10
 
 PREMIUM_ITEM = {
     "title": "Plan Premium",
