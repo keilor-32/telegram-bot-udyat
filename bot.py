@@ -3,8 +3,7 @@ import json
 import tempfile
 import logging
 import asyncio
-# Importar timezone junto con datetime y timedelta
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone # <-- ¡IMPORTANTE! Se añadió timezone
 from aiohttp import web
 from telegram import (
     Update,
@@ -25,13 +24,13 @@ from telegram.ext import (
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+import re
 
 # --- Inicializar Firestore con variable de entorno JSON doblemente serializada ---
 google_credentials_raw = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if not google_credentials_raw:
     raise ValueError("❌ La variable GOOGLE_APPLICATION_CREDENTIALS_JSON no está configurada.")
 
-# Asegurarse de que el JSON se parsea correctamente
 google_credentials_str = json.loads(google_credentials_raw)
 google_credentials_dict = json.loads(google_credentials_str)
 
@@ -61,32 +60,37 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Variables en memoria ---
-user_premium = {}             # {user_id: expire_at datetime}
-user_daily_views = {}         # {user_id: {date: count}}
-content_packages = {}         # {pkg_id: {photo_id, caption, video_id}}
+user_premium = {}           # {user_id: {"expire_at": datetime, "plan_type": "payload_del_plan"}}
+user_daily_views = {}       # {user_id: {date: count}}
+content_packages = {}       # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
 current_photo = {}
-user_verified = {}            # {user_id: True} si el usuario ya se verificó
+user_verified = {}          # {user_id: True} si el usuario ya se verificó
 
 # NUEVO: series con temporadas y capítulos
-series_data = {}              # {serie_id: {"title", "photo_id", "caption", "temporadas": {T1: [video_id, ...], ...}}}
-current_series = {}           # {user_id: {"title", "photo_id", "caption", "serie_id", "temporada", "capitulos": []}}
+series_data = {}            # {serie_id: {"title", "photo_id", "caption", "temporadas": {T1: [video_id, ...], ...}}}
+current_series = {}         # {user_id: {"title", "photo_id", "caption", "serie_id", "temporada", "capitulos": []}}
 
 # --- Firestore colecciones ---
 COLLECTION_USERS = "users_premium"
 COLLECTION_VIDEOS = "videos"
 COLLECTION_VIEWS = "user_daily_views"
 COLLECTION_CHATS = "known_chats"
-COLLECTION_SERIES = "series_data"   # NUEVO para series
-COLLECTION_VERIFIED_USERS = "verified_users" # NUEVO para usuarios verificados
+COLLECTION_SERIES = "series_data"
+COLLECTION_VERIFIED_USERS = "verified_users"
 
 # --- Funciones Firestore (Síncronas) ---
 def save_user_premium_firestore():
     batch = db.batch()
-    for uid, exp in user_premium.items():
+    for uid, exp_data in user_premium.items():
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
-        # Almacenar en formato ISO con información de zona horaria (Z para UTC)
-        batch.set(doc_ref, {"expire_at": exp.isoformat()})
+        data_to_save = exp_data.copy()
+        if "expire_at" in data_to_save and isinstance(data_to_save["expire_at"], datetime):
+            # Asegúrate de que expire_at sea aware antes de guardarlo como ISO
+            if data_to_save["expire_at"].tzinfo is None:
+                data_to_save["expire_at"] = data_to_save["expire_at"].replace(tzinfo=timezone.utc)
+            data_to_save["expire_at"] = data_to_save["expire_at"].isoformat()
+        batch.set(doc_ref, data_to_save)
     batch.commit()
 
 def load_user_premium_firestore():
@@ -95,12 +99,15 @@ def load_user_premium_firestore():
     for doc in docs:
         data = doc.to_dict()
         try:
-            # datetime.fromisoformat() puede parsear fechas conscientes si la cadena las incluye
-            expire_at = datetime.fromisoformat(data.get("expire_at"))
-            result[int(doc.id)] = expire_at
-        except Exception:
-            # En caso de error de parseo o si la fecha no tiene tzinfo, se ignora o se maneja
-            # una buena práctica sería loggear el error para investigar
+            if "expire_at" in data and isinstance(data["expire_at"], str):
+                # Al cargar, siempre interpreta como UTC y hazlo aware
+                loaded_dt = datetime.fromisoformat(data["expire_at"])
+                if loaded_dt.tzinfo is None: # Si fromisoformat no le puso tzinfo (Python < 3.11 para ISO sin Z)
+                    loaded_dt = loaded_dt.replace(tzinfo=timezone.utc)
+                data["expire_at"] = loaded_dt
+            result[int(doc.id)] = data
+        except Exception as e:
+            logger.error(f"Error cargando datos premium para {doc.id}: {e}")
             pass
     return result
 
@@ -144,7 +151,6 @@ def load_known_chats_firestore():
         return set(data.get("chat_ids", []))
     return set()
 
-# NUEVO: Guardar y cargar series
 def save_series_firestore():
     batch = db.batch()
     for serie_id, serie in series_data.items():
@@ -159,7 +165,6 @@ def load_series_firestore():
         result[doc.id] = doc.to_dict()
     return result
 
-# NUEVO: Guardar y cargar usuarios verificados
 def save_user_verified_firestore():
     batch = db.batch()
     for uid, verified_status in user_verified.items():
@@ -183,7 +188,7 @@ def save_data():
     save_user_daily_views_firestore()
     save_known_chats_firestore()
     save_series_firestore()
-    save_user_verified_firestore() # NUEVO
+    save_user_verified_firestore()
 
 def load_data():
     global user_premium, content_packages, user_daily_views, known_chats, series_data, user_verified
@@ -192,7 +197,7 @@ def load_data():
     user_daily_views = load_user_daily_views_firestore()
     known_chats = load_known_chats_firestore()
     series_data = load_series_firestore()
-    user_verified = load_user_verified_firestore() # NUEVO
+    user_verified = load_user_verified_firestore()
 
 # --- Planes ---
 FREE_LIMIT_VIDEOS = 10
@@ -218,24 +223,45 @@ PLAN_ULTRA_ITEM = {
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra",
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 1)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
 }
+
+# --- Funciones de Utilidad ---
+def escape_markdown_v2(text):
+    """
+    Helper function to escape characters for Markdown (which often behaves like MarkdownV2)
+    to prevent parsing errors if text contains special Markdown characters.
+    """
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 # --- Control acceso ---
 def is_premium(user_id):
-    # Comparar una fecha consciente con una fecha consciente
-    # datetime.now(timezone.utc) crea una fecha consciente de la zona horaria (UTC)
-    return user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc)
+    if user_id in user_premium and "expire_at" in user_premium[user_id]:
+        now_utc = datetime.now(timezone.utc) # Obtiene la hora actual en UTC y la hace aware
+        return user_premium[user_id]["expire_at"] > now_utc # Compara datetimes aware
+    return False
+
+def get_user_plan_name(user_id):
+    if is_premium(user_id):
+        plan_data = user_premium.get(user_id, {})
+        plan_type = plan_data.get("plan_type", "premium_plan")
+        if plan_type == PLAN_PRO_ITEM["payload"]:
+            return PLAN_PRO_ITEM["title"]
+        elif plan_type == PLAN_ULTRA_ITEM["payload"]:
+            return PLAN_ULTRA_ITEM["title"]
+        else:
+            return PREMIUM_ITEM["title"]
+    return "Gratis"
 
 def can_view_video(user_id):
     if is_premium(user_id):
         return True
-    # Almacenar y comparar la fecha como una cadena simple para daily views
-    today = str(datetime.now(timezone.utc).date()) # Usar date() para solo la fecha
+    today = str(datetime.now(timezone.utc).date()) # Usa datetime.now(timezone.utc)
     return user_daily_views.get(str(user_id), {}).get(today, 0) < FREE_LIMIT_VIDEOS
 
 async def register_view(user_id):
-    today = str(datetime.now(timezone.utc).date()) # Usar date() para solo la fecha
+    today = str(datetime.now(timezone.utc).date()) # Usa datetime.now(timezone.utc)
     uid = str(user_id)
     if uid not in user_daily_views:
         user_daily_views[uid] = {}
@@ -275,14 +301,11 @@ def get_main_menu():
         ]
     )
 
-
 # --- Handlers ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
 
-    # --- Lógica para el paso intermedio de videos individuales (mantener) ---
     if args and args[0].startswith("content_"):
         pkg_id = args[0].split("_")[1]
         pkg = content_packages.get(pkg_id)
@@ -299,9 +322,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=boton_ver_video,
             parse_mode="Markdown"
         )
-        return # Importante: salimos de la función después de manejar el parámetro content_
+        return
 
-    # NUEVO: manejo de argumentos para series (ej: start=serie_serieid)
     elif args and args[0].startswith("serie_"):
         serie_id = args[0].split("_", 1)[1]
         serie = series_data.get(serie_id)
@@ -309,7 +331,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Serie no encontrada.")
             return
         
-        # Obtener la primera temporada y sus capítulos para mostrarlos directamente
         temporada_keys = sorted(serie.get("temporadas", {}).keys())
         
         if not temporada_keys:
@@ -319,35 +340,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first_temporada_key = temporada_keys[0]
         capitulos = serie["temporadas"][first_temporada_key]
         
-        # Generar botones en cuadrícula
         botones = []
         row = []
         for i, _ in enumerate(capitulos):
             row.append(InlineKeyboardButton(f"{i+1}", callback_data=f"cap_{serie_id}_{first_temporada_key}_{i}"))
-            if len(row) == 5: # 5 botones por fila
+            if len(row) == 5:
                 botones.append(row)
                 row = []
-        if row: # Añadir la última fila si no está completa
+        if row:
             botones.append(row)
-            
-        # Botón para volver a la lista de temporadas si hubiera más de una
+        
         if len(temporada_keys) > 1:
             botones.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
 
         await update.message.reply_text(
-            f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nCapítulos de la Temporada {first_temporada_key[1:]}:",
+            f"📺 *{escape_markdown_v2(serie['title'])}*\n\n{escape_markdown_v2(serie['caption'])}\n\nCapítulos de la Temporada {first_temporada_key[1:]}:",
             reply_markup=InlineKeyboardMarkup(botones),
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
-        return # Importante: salimos de la función después de manejar el parámetro serie_
+        return
 
-    # --- Lógica para usuarios ya verificados ---
     if user_verified.get(user_id):
         await update.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
-        return # Salir si el usuario ya está verificado
+        return
 
-    # --- Flujo de verificación para usuarios no verificados ---
     await update.message.reply_text(
         "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
         reply_markup=InlineKeyboardMarkup(
@@ -374,11 +391,11 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 not_joined.append(username)
         except Exception as e:
             logger.warning(f"Error verificando canal: {e}")
-            not_joined.append(username) # Asumimos que no está unido si hay error
+            not_joined.append(username)
 
     if not not_joined:
-        user_verified[user_id] = True # Marcar como verificado
-        save_data() # Guardar el estado de verificación
+        user_verified[user_id] = True
+        save_data()
         await query.edit_message_text("✅ Verificación completada. Menú disponible:")
         await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
     else:
@@ -395,7 +412,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "planes":
         texto_planes = (
             f"💎 *Planes disponibles:*\n\n"
-            f"🔹 Free – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n"
+            f"🔹 Gratis – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n"
             "🔸 *Plan Pro*\n"
             "Precio: 40 estrellas\n"
             "Beneficios: 50 videos diarios, sin reenvíos ni compartir.\n\n"
@@ -414,8 +431,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_pro":
         if is_premium(user_id):
-            exp = user_premium[user_id].strftime("%Y-%m-%d")
-            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
+            exp_data = user_premium.get(user_id, {})
+            exp = exp_data.get("expire_at", datetime.min.replace(tzinfo=timezone.utc)).strftime("%Y-%m-%d") # Asegura datetime aware para format
+            plan_name = get_user_plan_name(user_id)
+            await query.message.reply_text(f"✅ Ya tienes el plan *{escape_markdown_v2(plan_name)}* activo hasta {exp}.", parse_mode="Markdown")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -430,8 +449,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_ultra":
         if is_premium(user_id):
-            exp = user_premium[user_id].strftime("%Y-%m-%d")
-            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
+            exp_data = user_premium.get(user_id, {})
+            exp = exp_data.get("expire_at", datetime.min.replace(tzinfo=timezone.utc)).strftime("%Y-%m-%d") # Asegura datetime aware para format
+            plan_name = get_user_plan_name(user_id)
+            await query.message.reply_text(f"✅ Ya tienes el plan *{escape_markdown_v2(plan_name)}* activo hasta {exp}.", parse_mode="Markdown")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -445,11 +466,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "perfil":
-        plan = "Premium" if is_premium(user_id) else "Free"
-        exp = user_premium.get(user_id)
+        plan_name = get_user_plan_name(user_id)
+        exp_data = user_premium.get(user_id, {})
+        exp = exp_data.get("expire_at")
+        
+        escaped_plan_name = escape_markdown_v2(plan_name)
+        
         await query.message.reply_text(
-            f"🧑 Perfil:\n• {user.full_name}\n• @{user.username or 'Sin usuario'}\n"
-            f"• ID: {user_id}\n• Plan: {plan}\n• Expira: {exp.strftime('%Y-%m-%d %H:%M:%S %Z') if exp else 'N/A'}", # Modificado para mostrar la zona horaria
+            f"🧑 Perfil:\n• {escape_markdown_v2(user.full_name)}\n• @{escape_markdown_v2(user.username or 'Sin usuario')}\n"
+            f"• ID: {user_id}\n• Plan: *{escaped_plan_name}*\n• Expira: {exp.strftime('%Y-%m-%d') if exp else 'N/A'}",
+            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]),
         )
 
@@ -465,7 +491,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
 
-    # --- Lógica para mostrar el video individual después del paso intermedio ---
     elif data.startswith("show_video_"):
         prefix, pkg_id = data.rsplit('_', 1)
         
@@ -474,7 +499,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Video no disponible o eliminado.")
             return
 
-        # Verificar suscripción a canales antes de permitir ver el video
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -500,7 +524,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await register_view(user_id)
             await query.message.reply_video(
                 video=pkg["video_id"],
-                caption=f"🎬 *{pkg['caption'].splitlines()[0]}*",
+                caption=f"🎬 *{escape_markdown_v2(pkg['caption'].splitlines()[0])}*",
                 parse_mode="Markdown",
                 protect_content=not is_premium(user_id)
             )
@@ -516,7 +540,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
             )
 
-    # --- Bloque para listar temporadas de una serie (ahora solo accesible si se añade un botón específico) ---
     elif data.startswith("list_temporadas_"):
         _, serie_id = data.split("_", 2)
         serie = series_data.get(serie_id)
@@ -529,9 +552,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             botones.append(
                 [InlineKeyboardButton(f"Temporada {temporada_key[1:]}", callback_data=f"ver_{serie_id}_{temporada_key}")]
             )
-            
+        
         await query.message.reply_text(
-            f"📺 Temporadas de *{serie['title']}*:",
+            f"📺 Temporadas de *{escape_markdown_v2(serie['title'])}*:",
             reply_markup=InlineKeyboardMarkup(botones),
             parse_mode="Markdown"
         )
@@ -541,9 +564,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"No se pudo eliminar el mensaje anterior en 'list_temporadas_': {e}")
 
 
-    # --- Bloque para mostrar capítulos de una temporada específica ---
     elif data.startswith("ver_"):
-        # formato ver_{serie_id}_{temporada}
         _, serie_id, temporada = data.split("_", 2)
         serie = series_data.get(serie_id)
         if not serie or temporada not in serie.get("temporadas", {}):
@@ -555,17 +576,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = []
         for i, _ in enumerate(capitulos):
             row.append(InlineKeyboardButton(f"{i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}"))
-            if len(row) == 5: # 5 botones por fila
+            if len(row) == 5:
                 botones.append(row)
                 row = []
-        if row: # Añadir la última fila si no está completa
+        if row:
             botones.append(row)
-            
-        # Botón para volver a la lista de temporadas (si aplica)
+        
         if len(serie.get("temporadas", {})) > 1:
             botones.append([InlineKeyboardButton("🔙 Volver a Temporadas", callback_data=f"list_temporadas_{serie_id}")])
-        else: # Si solo hay una temporada, volver al menú principal de la serie
-            botones.append([InlineKeyboardButton("🔙 Volver", callback_data=f"serie_{serie_id}")]) # Asumiendo que "serie_" llevaría a la primera temporada
+        else:
+            botones.append([InlineKeyboardButton("🔙 Volver", callback_data=f"serie_{serie_id}")])
 
         await query.message.reply_text(
             f"📺 Capítulos de Temporada {temporada[1:]}:",
@@ -578,7 +598,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"No se pudo eliminar el mensaje anterior en 'ver_': {e}")
 
 
-    # --- Bloque para mostrar video capítulo con navegación y seguridad de reenvíos ---
     elif data.startswith("cap_"):
         _, serie_id, temporada, index = data.split("_")
         index = int(index)
@@ -593,7 +612,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Capítulo fuera de rango.")
             return
 
-        # Verificar suscripción a canales antes de permitir ver el capítulo
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -627,19 +645,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             markup_buttons = [botones_navegacion]
             
-            # Si hay más de una temporada, damos la opción de volver a la lista de temporadas
-            # de lo contrario, si solo hay una temporada, volvemos a la lista de capítulos de esa temporada.
             if len(serie.get("temporadas", {})) > 1:
-                    markup_buttons.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
-            else: # Si solo hay una temporada, vuelve a la lista de capítulos de la misma temporada
+                 markup_buttons.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
+            else:
                 markup_buttons.append([InlineKeyboardButton("🔙 Ver Capítulos", callback_data=f"ver_{serie_id}_{temporada}")])
-
 
             markup = InlineKeyboardMarkup(markup_buttons)
 
             await query.message.reply_video(
                 video=video_id,
-                caption=f"📺 *{serie['title']}*\n\nTemporada {temporada[1:]} Capítulo {index+1}",
+                caption=f"📺 *{escape_markdown_v2(serie['title'])}*\n\nTemporada {temporada[1:]} Capítulo {index+1}",
                 parse_mode="Markdown",
                 reply_markup=markup,
                 protect_content=not is_premium(user_id)
@@ -665,12 +680,23 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
-    if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
-        # Asegurarse de que el expire_at también sea consciente de la zona horaria (UTC)
-        expire_at = datetime.now(timezone.utc) + timedelta(days=30)
-        user_premium[user_id] = expire_at
-        save_data()
-        await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
+    
+    expire_at = datetime.now(timezone.utc) + timedelta(days=30) # <-- ¡IMPORTANTE! Se usa timezone.utc
+    user_premium[user_id] = {
+        "expire_at": expire_at,
+        "plan_type": payload
+    }
+    save_data()
+    
+    plan_name = "tu plan"
+    if payload == PLAN_PRO_ITEM["payload"]:
+        plan_name = PLAN_PRO_ITEM["title"]
+    elif payload == PLAN_ULTRA_ITEM["payload"]:
+        plan_name = PLAN_ULTRA_ITEM["title"]
+    elif payload == PREMIUM_ITEM["payload"]:
+        plan_name = PREMIUM_ITEM["title"]
+
+    await update.message.reply_text(f"🎉 ¡Gracias por tu compra! Tu *{escape_markdown_v2(plan_name)}* se activó por 30 días.", parse_mode="Markdown")
 
 # --- Recepción contenido (sinopsis + video) ---
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -692,7 +718,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("❌ Primero envía una sinopsis con imagen.")
         return
 
-    pkg_id = str(int(datetime.now(timezone.utc).timestamp())) # Usar datetime.now(timezone.utc)
+    pkg_id = str(int(datetime.now(timezone.utc).timestamp())) # Usa datetime.now(timezone.utc)
     photo_id = current_photo[user_id]["photo_id"]
     caption = current_photo[user_id]["caption"]
     video_id = msg.video.file_id
@@ -723,6 +749,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=caption,
                 reply_markup=boton,
                 protect_content=True,
+                parse_mode="Markdown"
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
@@ -737,12 +764,11 @@ async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in current_photo:
         await update.message.reply_text("❌ Primero envía la sinopsis con imagen.")
         return
-    # Guardar temporalmente la info de la serie para que usuario añada temporadas y capítulos
-    serie_id = str(int(datetime.now(timezone.utc).timestamp())) # Usar datetime.now(timezone.utc)
+    serie_id = str(int(datetime.now(timezone.utc).timestamp())) # Usa datetime.now(timezone.utc)
     data = current_photo[user_id]
     current_series[user_id] = {
         "serie_id": serie_id,
-        "title": data["caption"].split("\n")[0],  # Toma la primera línea como título
+        "title": data["caption"].split("\n")[0],
         "photo_id": data["photo_id"],
         "caption": data["caption"],
         "temporadas": {},
@@ -792,182 +818,178 @@ async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📽️ Por favor envía ahora el/los video(s) para los capítulos de la temporada {temporada_num}. Puedes enviar un álbum de hasta 10 videos."
     )
-    # Guardamos temporada actual para agregar los videos que vengan después
-    current_series[user_id]["current_season_for_chapters"] = temporada_key
+    serie["temporada_activa"] = temporada_key
 
-# --- Manejar álbumes de video para capítulos de series ---
-async def handle_video_album(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Para recibir video(s) y asignarlo(s) como capítulo(s)
+    si el usuario está en proceso de agregar capítulo a temporada.
+    Maneja tanto videos individuales como álbumes.
+    """
     msg = update.message
     user_id = msg.from_user.id
 
-    if user_id not in current_series or "current_season_for_chapters" not in current_series[user_id]:
-        # Si no hay una serie en edición o no se espera un capítulo, ignorar o responder apropiadamente
-        await msg.reply_text("❌ No se está esperando un capítulo de serie en este momento. Usa /crear_serie para empezar o /agregar_temporada para añadir una temporada.")
+    if user_id not in current_series or "temporada_activa" not in current_series[user_id]:
+        if msg.video:
+            await recibir_video(update, context)
+        elif msg.photo and msg.caption:
+            await recibir_foto(update, context)
         return
 
-    temporada_key = current_series[user_id]["current_season_for_chapters"]
     serie = current_series[user_id]
-
-    if not msg.video:
-        await msg.reply_text("❌ Por favor, envía videos.")
+    temporada_key = serie["temporada_activa"]
+    
+    videos_added = 0
+    
+    if msg.media_group_id and msg.video:
+        serie["temporadas"][temporada_key].append(msg.video.file_id)
+        videos_added = 1
+        
+    elif msg.video:
+        serie["temporadas"][temporada_key].append(msg.video.file_id)
+        videos_added = 1
+    else:
         return
 
-    # Si es parte de un álbum, msg.media_group_id estará presente
-    # Pero aquí solo recibimos un video a la vez del álbum.
-    # El `telegram.ext.MessageHandler(filters.VIDEO & filters.AS_ALBUM, handle_video_album)`
-    # ya se encargaría de procesar cada video del álbum.
-    
-    video_id = msg.video.file_id
-    serie["temporadas"][temporada_key].append(video_id)
-
-    # Si el álbum ha terminado (lo sabríamos por telegram.ext, o si no hay más media_group_id)
-    # y si no estamos en un grupo de medios, es decir, el último video del álbum fue enviado o es un solo video
-    if not msg.media_group_id:
-        # Guardar la serie en Firestore solo después de que todos los capítulos de la temporada han sido enviados o si es un solo video
-        series_data[serie["serie_id"]] = serie
-        save_data()
+    if videos_added > 0:
+        total_chapters = len(serie["temporadas"][temporada_key])
         await msg.reply_text(
-            f"✅ Capítulo(s) añadido(s) a la Temporada {temporada_key[1:]}. "
-            f"Capítulos totales en esta temporada: {len(serie['temporadas'][temporada_key])}.\n"
-            "Usa /finalizar_serie para publicar o /agregar_temporada para otra temporada."
+            f"✅ Capítulo(s) agregado(s) a la temporada {temporada_key[1:]}. "
+            f"Total capítulos en esta temporada: {total_chapters}.\n"
+            f"Usa /finalizar_serie para guardar la serie o /agregar_capitulo {temporada_key[1:]} para añadir más capítulos."
         )
-        # Eliminar la clave temporal para evitar añadir videos incorrectamente
-        if "current_season_for_chapters" in current_series[user_id]:
-            del current_series[user_id]["current_season_for_chapters"]
 
-# --- Finalizar creación de serie y publicarla ---
+
 async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Finaliza y guarda la serie creada en Firestore y memoria."""
     user_id = update.message.from_user.id
     if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación para finalizar.")
+        await update.message.reply_text("❌ No hay serie en creación.")
         return
-
     serie = current_series[user_id]
-    serie_id = serie["serie_id"]
-
-    if not serie["temporadas"]:
-        await update.message.reply_text("❌ La serie no tiene temporadas. Añade al menos una con /agregar_temporada.")
-        return
+    if "temporada_activa" in serie:
+        del serie["temporada_activa"]
     
-    # Verificar que al menos una temporada tenga capítulos
-    has_chapters = any(len(capitulos) > 0 for capitulos in serie["temporadas"].values())
-    if not has_chapters:
-        await update.message.reply_text("❌ La serie no tiene capítulos. Asegúrate de agregar videos a tus temporadas.")
-        return
-
-    # Mover la serie de `current_series` a `series_data` y guardarla
-    series_data[serie_id] = serie
-    del current_series[user_id]
+    serie_id = serie["serie_id"]
+    series_data[serie_id] = {
+        "title": escape_markdown_v2(serie["title"]),
+        "photo_id": serie["photo_id"],
+        "caption": escape_markdown_v2(serie["caption"]),
+        "temporadas": serie["temporadas"],
+    }
     save_data()
+    del current_series[user_id]
 
-    # Botón para la serie
-    boton_serie = InlineKeyboardMarkup(
+    boton = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "Ver Serie", url=f"https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}"
+                    "▶️ Ver Serie",
+                    url=f"https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}",
                 )
             ]
         ]
     )
-
-    # Publicar la sinopsis de la serie en todos los chats conocidos
     for chat_id in known_chats:
         try:
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=serie["photo_id"],
-                caption=f"🎬 ¡Nueva Serie Disponible!\n\n*{serie['title']}*\n\n{serie['caption']}",
-                reply_markup=boton_serie,
-                parse_mode="Markdown",
+                caption=serie["caption"],
+                reply_markup=boton,
                 protect_content=True,
+                parse_mode="Markdown"
             )
         except Exception as e:
-            logger.warning(f"No se pudo enviar la serie a {chat_id}: {e}")
+            logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
 
-    await update.message.reply_text(f"✅ Serie '{serie['title']}' publicada y guardada.")
-
-
-# --- Comandos administrativos ---
-async def añadir_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    known_chats.add(chat_id)
-    save_data()
-    await update.message.reply_text(f"✅ Este chat ({chat_id}) ha sido añadido para envíos de contenido.")
-
-async def eliminar_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    if chat_id in known_chats:
-        known_chats.remove(chat_id)
-        save_data()
-        await update.message.reply_text(f"❌ Este chat ({chat_id}) ha sido eliminado de los envíos de contenido.")
-    else:
-        await update.message.reply_text("Este chat no estaba en la lista de chats conocidos.")
-
-async def mostrar_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if known_chats:
-        chat_list = "\n".join(known_chats)
-        await update.message.reply_text(f"Chats conocidos:\n{chat_list}")
-    else:
-        await update.message.reply_text("No hay chats conocidos.")
+    await update.message.reply_text("✅ Serie guardada y enviada a los grupos.")
 
 
-# --- Main ---
+async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type in ["group", "supergroup"]:
+        if chat.id not in known_chats:
+            known_chats.add(chat.id)
+            save_data()
+            logger.info(f"Grupo registrado: {chat.id}")
+
+
+# --- WEBHOOK aiohttp ---
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, app_telegram.bot)
+    await app_telegram.update_queue.put(update)
+    return web.Response(text="OK")
+
+
+async def on_startup(app):
+    webhook_url = f"{APP_URL}/webhook"
+    await app_telegram.bot.set_webhook(webhook_url)
+    logger.info(f"Webhook configurado en {webhook_url}")
+
+
+async def on_shutdown(app):
+    await app_telegram.bot.delete_webhook()
+    logger.info("Webhook eliminado")
+
+
+# --- App Telegram ---
+app_telegram = Application.builder().token(TOKEN).build()
+
+# Agregar handlers
+app_telegram.add_handler(CommandHandler("start", start))
+app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+app_telegram.add_handler(CallbackQueryHandler(handle_callback))
+app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+
+# Importante: el orden de los MessageHandlers importa.
+# Primero: Mensajes de fotos con caption (sinopsis inicial)
+app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.Caption(True) & filters.ChatType.PRIVATE, recibir_foto))
+
+# Segundo: Mensajes de video O mensajes de foto sin caption (para álbumes o videos individuales de series)
+# ¡CORRECCIÓN CLAVE AQUÍ: filters.Caption(False) en lugar de ~filters.PHOTO.caption
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE | filters.PHOTO & filters.Caption(False) & filters.ChatType.PRIVATE, recibir_video_serie))
+
+app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+
+# NUEVOS comandos para series
+app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
+app_telegram.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
+app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
+app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
+
+# --- Servidor aiohttp ---
+web_app = web.Application()
+web_app.router.add_post("/webhook", webhook_handler)
+web_app.router.add_get("/ping", lambda request: web.Response(text="✅ Bot activo."))
+web_app.on_startup.append(on_startup)
+web_app.on_shutdown.append(on_shutdown)
+
+
 async def main():
-    # Cargar datos al inicio
     load_data()
-    logger.info(f"Datos cargados. Usuarios premium: {len(user_premium)}, Contenido: {len(content_packages)}")
-    logger.info(f"Series cargadas: {len(series_data)}")
-    logger.info(f"Chats conocidos: {known_chats}")
-    logger.info(f"Usuarios verificados: {len(user_verified)}")
+    logger.info("🤖 Bot iniciado con webhook")
 
-    application = Application.builder().token(TOKEN).build()
+    await app_telegram.initialize()
+    await app_telegram.start()
 
-    # Handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-    application.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
 
-    # Handlers de administración de contenido (solo para el admin)
-    # Considera añadir un filtro por ID de usuario para estos comandos
-    application.add_handler(CommandHandler("anadir_chat", añadir_chat))
-    application.add_handler(CommandHandler("eliminar_chat", eliminar_chat))
-    application.add_handler(CommandHandler("mostrar_chats", mostrar_chats))
-    application.add_handler(MessageHandler(filters.PHOTO & filters.CaptionPresent, recibir_foto))
-    application.add_handler(MessageHandler(filters.VIDEO, recibir_video))
-
-    # NUEVOS: Handlers para series
-    application.add_handler(CommandHandler("crear_serie", crear_serie))
-    application.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
-    application.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
-    # Manejar videos enviados después de /agregar_capitulo
-    # Si quieres manejar álbumes, la lógica de `handle_video_album` necesitaría más refinamiento
-    # para coleccionar todos los videos de un media_group_id antes de procesar.
-    # Por ahora, con filters.VIDEO, se procesa cada video individualmente.
-    application.add_handler(MessageHandler(filters.VIDEO & ~filters.FORWARDED, handle_video_album))
-    application.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
-
-
-    # Start the bot
-    if APP_URL:
-        # Modo webhook
-        await application.bot.set_webhook(url=APP_URL)
-        app = web.Application()
-        app.router.add_post("/", application.webhook_handler)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", PORT)
-        await site.start()
-        logger.info(f"Webhook escuchando en puerto {PORT}")
-        # Mantener el servidor en ejecución
+    try:
         while True:
-            await asyncio.sleep(3600) # Dormir por una hora
-    else:
-        # Modo polling (para desarrollo local)
-        logger.info("Iniciando bot en modo polling...")
-        await application.run_polling()
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("🛑 Deteniendo bot...")
+    finally:
+        await app_telegram.stop()
+        await app_telegram.shutdown()
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
