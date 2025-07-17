@@ -19,8 +19,11 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     PreCheckoutQueryHandler,
-    filters, # Importa filters
+    filters,
 )
+
+# Importa BaseFilter para crear filtros personalizados
+from telegram.ext.filters import BaseFilter
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -1185,8 +1188,35 @@ async def webhook_handler(request):
     await application.process_update(update)
     return web.Response(text="ok")
 
+# Declarar 'application' globalmente para que 'create_state_filter' pueda acceder a ella
+application = None
+
+# --- Clase de Filtro Personalizado para Estados de Usuario ---
+# Definir esta clase aquí para que tenga acceso al 'application' global una vez inicializado
+class StateFilter(BaseFilter):
+    def __init__(self, state_name):
+        super().__init__()
+        self.state_name = state_name
+
+    def filter(self, message):
+        global application # Asegurarse de que el filtro pueda acceder a la instancia global de application
+        if application is None:
+            return False # El bot aún no está completamente inicializado
+
+        user_id = message.effective_user.id
+        # Verificar si el usuario está en user_data y si el estado coincide
+        return (
+            user_id in application.user_data
+            and application.user_data[user_id].get("state") == self.state_name
+        )
+
+# Función para crear una instancia del filtro de estado
+def create_state_filter_instance(state_name):
+    return StateFilter(state_name)
+
 # --- Función Principal (main) ---
 def main():
+    global application # Declara que vamos a usar la variable global 'application'
     load_data() # Cargar todos los datos al inicio
 
     application = Application.builder().token(TOKEN).build()
@@ -1208,32 +1238,31 @@ def main():
     application.add_handler(MessageHandler(filters.VIDEO & filters.User(ADMIN_IDS), handle_video_message))
     
     # Manejadores de texto para ADMINS, filtrando por estado de user_data
-    # Usaremos funciones lambda para el filtro, que es lo más cercano a lo que querías,
-    # pero aplicado directamente en el MessageHandler, no creando un "filters.CREATE"
+    # Usaremos las instancias de nuestra clase StateFilter para esto.
     
     # Película: Esperando sinopsis
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_movie_caption"),
+        filters.TEXT & filters.User(ADMIN_IDS) & create_state_filter_instance("waiting_for_movie_caption"),
         admin_receive_movie_caption
     ))
     # Serie: Esperando título
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_serie_title"),
+        filters.TEXT & filters.User(ADMIN_IDS) & create_state_filter_instance("waiting_for_serie_title"),
         admin_receive_serie_title
     ))
     # Serie: Esperando sinopsis
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_serie_caption"),
+        filters.TEXT & filters.User(ADMIN_IDS) & create_state_filter_instance("waiting_for_serie_caption"),
         admin_receive_serie_caption
     ))
     # Serie: Esperando número de temporada
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_temporada_number"),
+        filters.TEXT & filters.User(ADMIN_IDS) & create_state_filter_instance("waiting_for_temporada_number"),
         admin_receive_temporada_number
     ))
     # Difusión: Esperando mensaje
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_broadcast_message"),
+        filters.TEXT & filters.User(ADMIN_IDS) & create_state_filter_instance("waiting_for_broadcast_message"),
         admin_receive_broadcast_message
     ))
 
