@@ -453,7 +453,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Nueva lógica para mostrar el video individual después del paso intermedio ---
     elif data.startswith("show_video_"):
-        _, pkg_id = data.split("_")
+        # CORRECCIÓN AQUÍ: Usar rsplit para dividir correctamente
+        # `data.rsplit('_', 1)` asegura que solo se divida en el último '_'
+        # Ejemplo: "show_video_xyz123" -> ['show_video', 'xyz123']
+        prefix, pkg_id = data.rsplit('_', 1)
+        
         pkg = content_packages.get(pkg_id)
         if not pkg:
             await query.message.reply_text("❌ Video no disponible o eliminado.")
