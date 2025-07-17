@@ -24,6 +24,7 @@ from telegram.ext import (
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+import re # ¡IMPORTANTE! Nuevo import para manejar el escape de Markdown
 
 # --- Inicializar Firestore con variable de entorno JSON doblemente serializada ---
 google_credentials_raw = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -59,7 +60,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Variables en memoria ---
-user_premium = {}           # {user_id: expire_at datetime}
+user_premium = {}           # {user_id: {"expire_at": datetime, "plan_type": "payload_del_plan"}}
 user_daily_views = {}       # {user_id: {date: count}}
 content_packages = {}       # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
@@ -83,7 +84,11 @@ def save_user_premium_firestore():
     batch = db.batch()
     for uid, exp_data in user_premium.items():
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
-        batch.set(doc_ref, exp_data) # Guardar todo el diccionario
+        # Convertir datetime a string ISO para Firestore
+        data_to_save = exp_data.copy()
+        if "expire_at" in data_to_save and isinstance(data_to_save["expire_at"], datetime):
+            data_to_save["expire_at"] = data_to_save["expire_at"].isoformat()
+        batch.set(doc_ref, data_to_save)
     batch.commit()
 
 def load_user_premium_firestore():
@@ -92,11 +97,12 @@ def load_user_premium_firestore():
     for doc in docs:
         data = doc.to_dict()
         try:
-            # Asegurarse de que expire_at se convierta a datetime
-            if "expire_at" in data:
+            # Convertir string ISO a datetime al cargar
+            if "expire_at" in data and isinstance(data["expire_at"], str):
                 data["expire_at"] = datetime.fromisoformat(data["expire_at"])
             result[int(doc.id)] = data
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error cargando datos premium para {doc.id}: {e}")
             pass
     return result
 
@@ -214,8 +220,17 @@ PLAN_ULTRA_ITEM = {
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra",
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 1)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)], # Corregido a 100 estrellas
 }
+
+# --- Funciones de Utilidad ---
+def escape_markdown_v2(text):
+    """
+    Helper function to escape characters for Markdown (which often behaves like MarkdownV2)
+    to prevent parsing errors if text contains special Markdown characters.
+    """
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 # --- Control acceso ---
 def is_premium(user_id):
@@ -342,7 +357,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             botones.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
 
         await update.message.reply_text(
-            f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nCapítulos de la Temporada {first_temporada_key[1:]}:",
+            f"📺 *{escape_markdown_v2(serie['title'])}*\n\n{escape_markdown_v2(serie['caption'])}\n\nCapítulos de la Temporada {first_temporada_key[1:]}:",
             reply_markup=InlineKeyboardMarkup(botones),
             parse_mode="Markdown",
             disable_web_page_preview=True,
@@ -424,7 +439,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exp_data = user_premium.get(user_id, {})
             exp = exp_data.get("expire_at", datetime.min).strftime("%Y-%m-%d")
             plan_name = get_user_plan_name(user_id)
-            await query.message.reply_text(f"✅ Ya tienes el plan *{plan_name}* activo hasta {exp}.", parse_mode="Markdown")
+            await query.message.reply_text(f"✅ Ya tienes el plan *{escape_markdown_v2(plan_name)}* activo hasta {exp}.", parse_mode="Markdown")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -442,7 +457,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exp_data = user_premium.get(user_id, {})
             exp = exp_data.get("expire_at", datetime.min).strftime("%Y-%m-%d")
             plan_name = get_user_plan_name(user_id)
-            await query.message.reply_text(f"✅ Ya tienes el plan *{plan_name}* activo hasta {exp}.", parse_mode="Markdown")
+            await query.message.reply_text(f"✅ Ya tienes el plan *{escape_markdown_v2(plan_name)}* activo hasta {exp}.", parse_mode="Markdown")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -460,9 +475,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exp_data = user_premium.get(user_id, {})
         exp = exp_data.get("expire_at")
         
+        # Escapamos el nombre del plan antes de ponerlo en negrita
+        escaped_plan_name = escape_markdown_v2(plan_name)
+        
         await query.message.reply_text(
-            f"🧑 Perfil:\n• {user.full_name}\n• @{user.username or 'Sin usuario'}\n"
-            f"• ID: {user_id}\n• Plan: *{plan_name}*\n• Expira: {exp.strftime('%Y-%m-%d') if exp else 'N/A'}",
+            f"🧑 Perfil:\n• {escape_markdown_v2(user.full_name)}\n• @{escape_markdown_v2(user.username or 'Sin usuario')}\n"
+            f"• ID: {user_id}\n• Plan: *{escaped_plan_name}*\n• Expira: {exp.strftime('%Y-%m-%d') if exp else 'N/A'}",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]),
         )
@@ -514,7 +532,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await register_view(user_id)
             await query.message.reply_video(
                 video=pkg["video_id"],
-                caption=f"🎬 *{pkg['caption'].splitlines()[0]}*",
+                caption=f"🎬 *{escape_markdown_v2(pkg['caption'].splitlines()[0])}*", # Escapar título también
                 parse_mode="Markdown",
                 protect_content=not is_premium(user_id)
             )
@@ -545,7 +563,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         await query.message.reply_text(
-            f"📺 Temporadas de *{serie['title']}*:",
+            f"📺 Temporadas de *{escape_markdown_v2(serie['title'])}*:",
             reply_markup=InlineKeyboardMarkup(botones),
             parse_mode="Markdown"
         )
@@ -653,7 +671,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await query.message.reply_video(
                 video=video_id,
-                caption=f"📺 *{serie['title']}*\n\nTemporada {temporada[1:]} Capítulo {index+1}",
+                caption=f"📺 *{escape_markdown_v2(serie['title'])}*\n\nTemporada {temporada[1:]} Capítulo {index+1}",
                 parse_mode="Markdown",
                 reply_markup=markup,
                 protect_content=not is_premium(user_id)
@@ -695,7 +713,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif payload == PREMIUM_ITEM["payload"]:
         plan_name = PREMIUM_ITEM["title"]
 
-    await update.message.reply_text(f"🎉 ¡Gracias por tu compra! Tu *{plan_name}* se activó por 30 días.", parse_mode="Markdown")
+    await update.message.reply_text(f"🎉 ¡Gracias por tu compra! Tu *{escape_markdown_v2(plan_name)}* se activó por 30 días.", parse_mode="Markdown")
 
 # --- Recepción contenido (sinopsis + video) ---
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -745,9 +763,10 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=photo_id,
-                caption=caption,
+                caption=caption, # La caption ya debería estar limpia
                 reply_markup=boton,
                 protect_content=True,
+                parse_mode="Markdown" # Asegúrate de que las captions que envías estén bien formadas si tienen Markdown
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
@@ -829,33 +848,42 @@ async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = update.message
     user_id = msg.from_user.id
 
-    if user_id not in current_series:
-        # No estamos en proceso de crear capítulo, manejar como video individual
-        await recibir_video(update, context)
+    # Si no hay una serie en creación o una temporada activa, se maneja como video individual
+    if user_id not in current_series or "temporada_activa" not in current_series[user_id]:
+        # Para que el bot responda correctamente cuando envían una foto con caption
+        # y luego un video, sin pasar por /crear_serie.
+        # Filtramos solo si es un video, ya que la foto la maneja 'recibir_foto'.
+        if msg.video:
+            await recibir_video(update, context)
+        elif msg.photo and msg.caption:
+            await recibir_foto(update, context)
         return
 
     serie = current_series[user_id]
-    if "temporada_activa" not in serie:
-        # No hay temporada activa para añadir capítulo, manejar como video individual
-        await recibir_video(update, context)
-        return
-
     temporada_key = serie["temporada_activa"]
     
     videos_added = 0
-    if msg.media_group_id and msg.video: # Es parte de un álbum
-        # Los videos en un álbum llegan como mensajes individuales con el mismo media_group_id
-        # Para evitar duplicados y procesar solo una vez por álbum, podríamos usar un cache temporal
-        # Simple approach: solo añadir si no está ya en la lista (no es perfecto si hay reenvíos idénticos)
-        if msg.video.file_id not in serie["temporadas"][temporada_key]:
-            serie["temporadas"][temporada_key].append(msg.video.file_id)
-            videos_added = 1
+    
+    # Manejar media_group (álbum)
+    if msg.media_group_id and msg.video:
+        # Se asume que cada video en un media_group es un capítulo.
+        # No se necesita un cache explícito si `append` se encarga de añadir.
+        serie["temporadas"][temporada_key].append(msg.video.file_id)
+        videos_added = 1
+        
+        # Opcional: Para evitar múltiples mensajes de confirmación por cada video en un álbum,
+        # podríamos guardar un contador y solo enviar el mensaje después de X segundos
+        # o cuando se detecte el último video del álbum (más complejo).
+        # Por ahora, un mensaje por cada video de un álbum está bien.
+
     elif msg.video: # Es un video individual
         serie["temporadas"][temporada_key].append(msg.video.file_id)
         videos_added = 1
     else:
-        await msg.reply_text("❌ Envía un video válido para el capítulo.")
-        return
+        # Si no es un video ni parte de un álbum de videos en el contexto de una serie,
+        # puede ser un mensaje de texto o algo no esperado.
+        # Podríamos ignorarlo o dar una indicación más específica.
+        return # No respondemos si no es un video aquí
 
     if videos_added > 0:
         total_chapters = len(serie["temporadas"][temporada_key])
@@ -878,10 +906,12 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Removemos estado temporal
     if "temporada_activa" in serie:
         del serie["temporada_activa"]
+    
+    # Escapar el título y la descripción antes de guardarlos si vas a mostrarlos con Markdown
     series_data[serie_id] = {
-        "title": serie["title"],
+        "title": escape_markdown_v2(serie["title"]),
         "photo_id": serie["photo_id"],
-        "caption": serie["caption"],
+        "caption": escape_markdown_v2(serie["caption"]),
         "temporadas": serie["temporadas"],
     }
     save_data()
@@ -904,9 +934,10 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=serie["photo_id"],
-                caption=serie["caption"],
+                caption=serie["caption"], # La caption ya está escapada
                 reply_markup=boton,
                 protect_content=True,
+                parse_mode="Markdown"
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
@@ -951,11 +982,15 @@ app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
 app_telegram.add_handler(CallbackQueryHandler(handle_callback))
 app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
 app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 
-# Reemplazamos handler video privado para que gestione video capítulos serie o video normal
-# Este handler capturará tanto videos individuales como aquellos que forman parte de un media_group (álbum)
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE | filters.PHOTO & filters.ChatType.PRIVATE, recibir_video_serie))
+# Importante: el orden de los MessageHandlers importa.
+# Primero: Mensajes de fotos con caption (sinopsis inicial)
+app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.Caption & filters.ChatType.PRIVATE, recibir_foto))
+# Segundo: Mensajes de video O mensajes de foto sin caption (para álbumes o videos individuales de series)
+# La función `recibir_video_serie` está diseñada para manejar ambos escenarios (video individual, álbum de videos)
+# y decidir si está en el contexto de una serie o si es un video "suelto".
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE | filters.PHOTO & ~filters.Caption & filters.ChatType.PRIVATE, recibir_video_serie))
+
 
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
 
