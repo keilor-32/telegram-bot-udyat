@@ -200,7 +200,7 @@ def load_data():
     user_verified = load_user_verified_firestore()
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 10
+FREE_LIMIT_VIDEOS = 3
 
 PREMIUM_ITEM = {
     "title": "Plan Premium",
@@ -220,10 +220,10 @@ PLAN_PRO_ITEM = {
 
 PLAN_ULTRA_ITEM = {
     "title": "Plan Ultra",
-    "description": "Videos y reenvíos ilimitados, sin restricciones.",
+    "description": "Videos ilimitados y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra",
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 1)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
 }
 
 # --- Funciones de Utilidad ---
