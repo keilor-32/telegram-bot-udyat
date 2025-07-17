@@ -223,7 +223,7 @@ PLAN_ULTRA_ITEM = {
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra",
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 1)],
 }
 
 # --- Funciones de Utilidad ---
