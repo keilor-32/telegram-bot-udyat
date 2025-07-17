@@ -990,8 +990,8 @@ app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.Caption(True) & 
 # Segundo: Mensajes de video O mensajes de foto sin caption (para álbumes o videos individuales de series)
 # La función `recibir_video_serie` está diseñada para manejar ambos escenarios (video individual, álbum de videos)
 # y decidir si está en el contexto de una serie o si es un video "suelto".
-# CAMBIO CLAVE AQUÍ: filters.PHOTO & ~filters.PHOTO.caption
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE | filters.PHOTO & ~filters.PHOTO.caption & filters.ChatType.PRIVATE, recibir_video_serie))
+# CAMBIO CLAVE AQUÍ: filters.PHOTO & filters.Caption(False)
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE | filters.PHOTO & filters.Caption(False) & filters.ChatType.PRIVATE, recibir_video_serie))
 
 
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
