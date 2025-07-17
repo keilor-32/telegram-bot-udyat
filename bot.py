@@ -283,12 +283,12 @@ def get_main_menu():
                 InlineKeyboardButton("📚 Libro PDF", url="https://t.me/+iJ5D1VLCAW5hYzhk"),
             ],
             [
-                InlineKeyboardButton("💬 Chat Pedido", callback_data="chat_pedido"),
+                InlineKeyboardButton("💬 Chat Pedido", url="https://t.me/+6eA7AdRfgq81NzBh"),
                 InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
             ],
             [
-                InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
-                InlineKeyboardButton("👥 Grupo", url="https://t.me/udyat_channel"),
+                InlineKeyboardButton("📢 peliculas", url="https://t.me/+dVTzx8dMGf81NTcx"),
+                InlineKeyboardButton("👥 series", url="https://t.me/+qiFtv2EmV-xmNWFh"),
             ],
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
