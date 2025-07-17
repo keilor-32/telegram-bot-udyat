@@ -279,12 +279,12 @@ def get_main_menu():
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🎧 Audio Libros", callback_data="audio_libros"),
-                InlineKeyboardButton("📚 Libro PDF", callback_data="libro_pdf"),
+                InlineKeyboardButton("🎧 Audio Libros", url="https://t.me/+3lDaURwlx-g4NWJk"),
+                InlineKeyboardButton("📚 Libro PDF", url="https://t.me/+iJ5D1VLCAW5hYzhk"),
             ],
             [
                 InlineKeyboardButton("💬 Chat Pedido", callback_data="chat_pedido"),
-                InlineKeyboardButton("🎓 Cursos", callback_data="cursos"),
+                InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
             ],
             [
                 InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
@@ -295,8 +295,8 @@ def get_main_menu():
                 InlineKeyboardButton("🧑 Perfil", callback_data="perfil"),
             ],
             [
-                InlineKeyboardButton("ℹ️ Info", callback_data="info"),
-                InlineKeyboardButton("❓ Ayuda", callback_data="ayuda"),
+                InlineKeyboardButton("ℹ️ Info", callback_data="sistema creado por hades"),
+                InlineKeyboardButton("❓ soporte", url="https://t.me/Hsito"),
             ],
         ]
     )
