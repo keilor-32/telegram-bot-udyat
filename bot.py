@@ -200,7 +200,7 @@ def is_premium(user_id):
 
 def can_view_video(user_id):
     if is_premium(user_id):
-        return True
+        return True  # Si es premium, siempre puede ver
     today = str(datetime.utcnow().date())
     return user_daily_views.get(str(user_id), {}).get(today, 0) < FREE_LIMIT_VIDEOS
 
@@ -291,7 +291,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if can_view_video(user_id):
             await register_view(user_id)
             await update.message.reply_video(
-                video=pkg["video_id"], caption="🎬 Aquí tienes el video completo.", protect_content=not is_premium(user_id)
+                video=pkg["video_id"], caption=pkg["caption"], protect_content=not is_premium(user_id)
             )
         else:
             await update.message.reply_text(
@@ -745,13 +745,13 @@ async def webhook_handler(request):
     return web.Response(text="OK")
 
 
-async def on_startup(app):
+async def on_startup(app_instance): # Cambiado 'app' a 'app_instance' para evitar conflicto
     webhook_url = f"{APP_URL}/webhook"
     await app_telegram.bot.set_webhook(webhook_url)
     logger.info(f"Webhook configurado en {webhook_url}")
 
 
-async def on_shutdown(app):
+async def on_shutdown(app_instance): # Cambiado 'app' a 'app_instance' para evitar conflicto
     await app_telegram.bot.delete_webhook()
     logger.info("Webhook eliminado")
 
@@ -767,5 +767,33 @@ app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
 app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 
-# NUEVO: Reemplazamos handler video privado para que gestione video capítulos serie o video normal
-app
+# Reemplazamos handler video privado para que gestione video capítulos serie o video normal
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
+
+app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+
+# Comandos para series
+app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
+app_telegram.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
+app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
+app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
+
+
+# Cargar datos al inicio
+load_data()
+
+if __name__ == '__main__':
+    # Configurar y ejecutar el servidor web para el webhook
+    web_app = web.Application()
+    web_app.router.add_post("/webhook", webhook_handler)
+    web_app.on_startup.append(on_startup)
+    web_app.on_shutdown.append(on_shutdown)
+
+    # Iniciar la aplicación de Telegram en un hilo separado o como parte del loop de aiohttp
+    async def run_bot():
+        await app_telegram.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=f"{APP_URL}/webhook")
+
+    # Ejecutar ambas aplicaciones
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_bot())
+    web.run_app(web_app, port=PORT) # Se corrigió 'app' a 'web_app' aquí
