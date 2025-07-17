@@ -292,6 +292,8 @@ def get_main_menu():
             ],
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
+            ],
+             [
                 InlineKeyboardButton("🧑 Perfil", callback_data="perfil"),
             ],
             [
