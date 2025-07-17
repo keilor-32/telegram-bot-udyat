@@ -299,15 +299,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not serie:
             await update.message.reply_text("❌ Serie no encontrada.")
             return
-        # Mostrar temporadas
+        
+        # Obtener la primera temporada y sus capítulos para mostrarlos directamente
+        # Asumiendo que las claves de temporadas son "T1", "T2", etc.
+        # Ordenamos las claves para asegurarnos de tomar la primera temporada correctamente
+        temporada_keys = sorted(serie.get("temporadas", {}).keys())
+        
+        if not temporada_keys:
+            await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles.")
+            return
+
+        # Tomamos la primera temporada para mostrar sus capítulos
+        first_temporada_key = temporada_keys[0]
+        capitulos = serie["temporadas"][first_temporada_key]
+        
         botones = []
-        for temporada in serie.get("temporadas", {}).keys():
+        for i, _ in enumerate(capitulos):
             botones.append(
-                [InlineKeyboardButton(f"Temporada {temporada[1:]}", callback_data=f"ver_{serie_id}_{temporada}")]
+                [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{first_temporada_key}_{i}")]
             )
+        
+        # Botón para volver a la lista de temporadas si hubiera más de una
+        # (puedes decidir si quieres mantener esta opción o no)
+        if len(temporada_keys) > 1:
+            botones.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
+
         await update.message.reply_text(
-            f"📺 {serie['title']}\n\n{serie['caption']}",
+            f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nCapítulos de la Temporada {first_temporada_key[1:]}:",
             reply_markup=InlineKeyboardMarkup(botones),
+            parse_mode="Markdown",
             disable_web_page_preview=True,
         )
         return # Importante: salimos de la función después de manejar el parámetro serie_
@@ -435,7 +455,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
 
-    # --- Nueva lógica para mostrar el video individual después del paso intermedio ---
+    # --- Lógica para mostrar el video individual después del paso intermedio ---
     elif data.startswith("show_video_"):
         prefix, pkg_id = data.rsplit('_', 1)
         
@@ -486,20 +506,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
             )
 
-    # --- Bloque para mostrar temporadas de series ---
+    # --- Bloque para listar temporadas de una serie (ahora solo accesible si se añade un botón específico) ---
+    elif data.startswith("list_temporadas_"):
+        _, serie_id = data.split("_", 2)
+        serie = series_data.get(serie_id)
+        if not serie:
+            await query.message.reply_text("❌ Serie no encontrada.")
+            return
+
+        botones = []
+        for temporada_key in sorted(serie.get("temporadas", {}).keys()):
+            botones.append(
+                [InlineKeyboardButton(f"Temporada {temporada_key[1:]}", callback_data=f"ver_{serie_id}_{temporada_key}")]
+            )
+        
+        await query.message.reply_text(
+            f"📺 Temporadas de *{serie['title']}*:",
+            reply_markup=InlineKeyboardMarkup(botones),
+            parse_mode="Markdown"
+        )
+        try:
+            await query.delete_message()
+        except Exception as e:
+            logger.warning(f"No se pudo eliminar el mensaje anterior en 'list_temporadas_': {e}")
+
+
+    # --- Bloque para mostrar capítulos de una temporada específica (anteriormente 'ver_', ahora mantiene su lógica interna) ---
     elif data.startswith("ver_"):
+        # formato ver_{serie_id}_{temporada}
         _, serie_id, temporada = data.split("_", 2)
         serie = series_data.get(serie_id)
         if not serie or temporada not in serie.get("temporadas", {}):
             await query.message.reply_text("❌ Temporada no disponible.")
             return
 
+        capitulos = serie["temporadas"][temporada]
         botones = []
-        for i, _ in enumerate(serie["temporadas"][temporada]):
+        for i, _ in enumerate(capitulos):
             botones.append(
                 [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}")]
             )
         
+        # Botón para volver a la lista de temporadas
+        botones.append([InlineKeyboardButton("🔙 Volver a Temporadas", callback_data=f"list_temporadas_{serie_id}")])
+
         await query.message.reply_text(
             f"📺 Capítulos de Temporada {temporada[1:]}:",
             reply_markup=InlineKeyboardMarkup(botones)
@@ -559,7 +609,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 botones_navegacion.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{temporada}_{index + 1}"))
             
             markup_buttons = [botones_navegacion]
-            markup_buttons.append([InlineKeyboardButton("🔙 Volver Temporada", callback_data=f"ver_{serie_id}_{temporada}")]), 
+            
+            # Si hay más de una temporada, damos la opción de volver a la lista de temporadas
+            # de lo contrario, si solo hay una temporada, volvemos a la lista de capítulos de esa temporada.
+            if len(serie.get("temporadas", {})) > 1:
+                 markup_buttons.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
+            else: # Si solo hay una temporada, vuelve a la lista de capítulos de la misma temporada
+                markup_buttons.append([InlineKeyboardButton("🔙 Ver Capítulos", callback_data=f"ver_{serie_id}_{temporada}")])
+
 
             markup = InlineKeyboardMarkup(markup_buttons)
 
@@ -772,6 +829,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [
                 InlineKeyboardButton(
                     "▶️ Ver Serie",
+                    # Al darle "Ver Serie", se redirige directamente a la lista de capítulos de la primera temporada
                     url=f"https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}",
                 )
             ]
