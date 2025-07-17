@@ -1128,28 +1128,26 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         known_chats.add(chat_id)
         save_data() # Guardar los chats conocidos cuando un nuevo usuario envía un mensaje
 
-    # Si el estado es para recibir sinopsis de película (admin)
-    if context.user_data.get("state") == "waiting_for_movie_caption":
-        await admin_receive_movie_caption(update, context)
-    # Si el estado es para recibir título de serie (admin)
-    elif context.user_data.get("state") == "waiting_for_serie_title":
-        await admin_receive_serie_title(update, context)
-    # Si el estado es para recibir sinopsis de serie (admin)
-    elif context.user_data.get("state") == "waiting_for_serie_caption":
-        await admin_receive_serie_caption(update, context)
-    # Si el estado es para recibir número de temporada (admin)
-    elif context.user_data.get("state") == "waiting_for_temporada_number":
-        await admin_receive_temporada_number(update, context)
-    # Si el estado es para recibir mensaje de difusión (admin)
-    elif context.user_data.get("state") == "waiting_for_broadcast_message":
-        await admin_receive_broadcast_message(update, context)
-    # Para cualquier otro mensaje de texto, si el usuario no está verificado,
-    # y no está en un flujo admin específico, no hacer nada o enviar un mensaje por defecto.
+    # Si el mensaje proviene de un admin en un estado específico
+    user_id = update.effective_user.id
+    if is_admin(user_id):
+        current_state = context.user_data.get("state")
+        if current_state == "waiting_for_movie_caption":
+            await admin_receive_movie_caption(update, context)
+        elif current_state == "waiting_for_serie_title":
+            await admin_receive_serie_title(update, context)
+        elif current_state == "waiting_for_serie_caption":
+            await admin_receive_serie_caption(update, context)
+        elif current_state == "waiting_for_temporada_number":
+            await admin_receive_temporada_number(update, context)
+        elif current_state == "waiting_for_broadcast_message":
+            await admin_receive_broadcast_message(update, context)
+    # Para cualquier otro mensaje de texto de usuario normal, si no está verificado,
+    # su mensaje de texto podría ser el intento de "verificar"
+    # o simplemente enviar algo. Podríamos repetir el mensaje de verificación.
     elif not user_verified.get(update.effective_user.id):
-        # Si el usuario no está verificado y no está en un flujo admin,
-        # su mensaje de texto podría ser el intento de "verificar"
-        # o simplemente enviar algo. Podríamos repetir el mensaje de verificación.
         pass # La función start() ya maneja esto al inicio.
+
 
 # --- Manejo de fotos genéricas (para añadir contenido) ---
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1203,17 +1201,19 @@ def main():
     application.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
     application.add_handler(CallbackQueryHandler(handle_callback)) # Maneja todos los demás callbacks
 
-    # --- Handlers de Mensajes para Admin ---
+    # --- Handlers de Mensajes para Admin (Corregidos con filters.Status) ---
     application.add_handler(MessageHandler(filters.PHOTO & filters.User(ADMIN_IDS), handle_photo_message))
     application.add_handler(MessageHandler(filters.VIDEO & filters.User(ADMIN_IDS), handle_video_message))
+    
+    # Handler para mensajes de texto de ADMINS en estados específicos
     application.add_handler(MessageHandler(
         filters.TEXT & filters.User(ADMIN_IDS) & (
-            filters.COMMAND | # Capturar comandos como /finalizar_serie
-            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_movie_caption")) |
-            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_serie_title")) |
-            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_serie_caption")) |
-            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_temporada_number")) |
-            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_broadcast_message"))
+            filters.COMMAND | # Capturar comandos como /finalizar_serie, /siguiente_temporada, /cancelar_difusion
+            filters.Status("waiting_for_movie_caption") |
+            filters.Status("waiting_for_serie_title") |
+            filters.Status("waiting_for_serie_caption") |
+            filters.Status("waiting_for_temporada_number") |
+            filters.Status("waiting_for_broadcast_message")
         ),
         handle_text_message,
     ))
@@ -1230,8 +1230,9 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$"))
     application.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
 
-    # --- Handler para mensajes de texto genéricos (de usuarios normales y admins en estados no específicos) ---
+    # --- Handler para mensajes de texto genéricos (de usuarios normales y admins que no están en un estado específico de flujo) ---
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
 
     # --- Iniciar el bot en modo webhook para Render ---
     loop = asyncio.get_event_loop()
