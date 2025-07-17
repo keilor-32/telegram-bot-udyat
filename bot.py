@@ -189,7 +189,7 @@ def load_data():
     user_verified = load_user_verified_firestore() # NUEVO
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 10
+FREE_LIMIT_VIDEOS = 3
 
 PREMIUM_ITEM = {
     "title": "Plan Premium",
@@ -209,10 +209,10 @@ PLAN_PRO_ITEM = {
 
 PLAN_ULTRA_ITEM = {
     "title": "Plan Ultra",
-    "description": "Videos y reenvíos ilimitados, sin restricciones.",
+    "description": "Videos ilimitados y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra",
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 1)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
 }
 
 # --- Control acceso ---
@@ -244,24 +244,26 @@ def get_main_menu():
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🎧 Audio Libros", callback_data="audio_libros"),
-                InlineKeyboardButton("📚 Libro PDF", callback_data="libro_pdf"),
+                InlineKeyboardButton("🎧 Audio Libros", url="https://t.me/+3lDaURwlx-g4NWJk"),
+                InlineKeyboardButton("📚 Libro PDF", url="https://t.me/+iJ5D1VLCAW5hYzhk"),
             ],
             [
-                InlineKeyboardButton("💬 Chat Pedido", callback_data="chat_pedido"),
-                InlineKeyboardButton("🎓 Cursos", callback_data="cursos"),
+                InlineKeyboardButton("💬 Chat Pedido", url="https://t.me/+6eA7AdRfgq81NzBh"),
+                InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
             ],
             [
-                InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
-                InlineKeyboardButton("👥 Grupo", url="https://t.me/udyat_channel"),
+                InlineKeyboardButton("📢 peliculas", url="https://t.me/+dVTzx8dMGf81NTcx"),
+                InlineKeyboardButton("👥 series", url="https://t.me/+qiFtv2EmV-xmNWFh"),
             ],
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
+             ],
+            [
                 InlineKeyboardButton("🧑 Perfil", callback_data="perfil"),
             ],
             [
                 InlineKeyboardButton("ℹ️ Info", callback_data="info"),
-                InlineKeyboardButton("❓ Ayuda", callback_data="ayuda"),
+                InlineKeyboardButton("❓ soporte", callback_data="https://t.me/Hsito"),
             ],
         ]
     )
@@ -340,7 +342,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Flujo de verificación para usuarios no verificados ---
     await update.message.reply_text(
-        "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
+        "👋 ¡Hola! debes unirte a todos nuestros canales para poder usar este bot una ves te hayas unidos haz click en verificar suscripcion para continuar.",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
