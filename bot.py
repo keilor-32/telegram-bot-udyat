@@ -301,26 +301,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Obtener la primera temporada y sus capítulos para mostrarlos directamente
-        # Asumiendo que las claves de temporadas son "T1", "T2", etc.
-        # Ordenamos las claves para asegurarnos de tomar la primera temporada correctamente
         temporada_keys = sorted(serie.get("temporadas", {}).keys())
         
         if not temporada_keys:
             await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles.")
             return
 
-        # Tomamos la primera temporada para mostrar sus capítulos
         first_temporada_key = temporada_keys[0]
         capitulos = serie["temporadas"][first_temporada_key]
         
+        # Generar botones en cuadrícula
         botones = []
+        row = []
         for i, _ in enumerate(capitulos):
-            botones.append(
-                [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{first_temporada_key}_{i}")]
-            )
+            row.append(InlineKeyboardButton(f"{i+1}", callback_data=f"cap_{serie_id}_{first_temporada_key}_{i}"))
+            if len(row) == 5: # 5 botones por fila
+                botones.append(row)
+                row = []
+        if row: # Añadir la última fila si no está completa
+            botones.append(row)
         
         # Botón para volver a la lista de temporadas si hubiera más de una
-        # (puedes decidir si quieres mantener esta opción o no)
         if len(temporada_keys) > 1:
             botones.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
 
@@ -531,7 +532,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"No se pudo eliminar el mensaje anterior en 'list_temporadas_': {e}")
 
 
-    # --- Bloque para mostrar capítulos de una temporada específica (anteriormente 'ver_', ahora mantiene su lógica interna) ---
+    # --- Bloque para mostrar capítulos de una temporada específica ---
     elif data.startswith("ver_"):
         # formato ver_{serie_id}_{temporada}
         _, serie_id, temporada = data.split("_", 2)
@@ -542,13 +543,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         capitulos = serie["temporadas"][temporada]
         botones = []
+        row = []
         for i, _ in enumerate(capitulos):
-            botones.append(
-                [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}")]
-            )
+            row.append(InlineKeyboardButton(f"{i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}"))
+            if len(row) == 5: # 5 botones por fila
+                botones.append(row)
+                row = []
+        if row: # Añadir la última fila si no está completa
+            botones.append(row)
         
-        # Botón para volver a la lista de temporadas
-        botones.append([InlineKeyboardButton("🔙 Volver a Temporadas", callback_data=f"list_temporadas_{serie_id}")])
+        # Botón para volver a la lista de temporadas (si aplica)
+        if len(serie.get("temporadas", {})) > 1:
+            botones.append([InlineKeyboardButton("🔙 Volver a Temporadas", callback_data=f"list_temporadas_{serie_id}")])
+        else: # Si solo hay una temporada, volver al menú principal de la serie
+            botones.append([InlineKeyboardButton("🔙 Volver", callback_data=f"serie_{serie_id}")]) # Asumiendo que "serie_" llevaría a la primera temporada
 
         await query.message.reply_text(
             f"📺 Capítulos de Temporada {temporada[1:]}:",
@@ -752,17 +760,17 @@ async def agregar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ La temporada {temporada_num} ya existe.")
         return
     serie["temporadas"][temporada_key] = []
-    await update.message.reply_text(f"✅ Temporada {temporada_num} agregada.\nAhora envía los videos de capítulos a esta temporada usando /agregar_capitulo {temporada_num}")
+    await update.message.reply_text(f"✅ Temporada {temporada_num} agregada.\nAhora envía todos los videos de los capítulos para esta temporada en un álbum (o varios si hay muchos) o de uno en uno, usando el mismo comando /agregar_capitulo {temporada_num}.")
 
 async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando para agregar capítulo a temporada."""
+    """Comando para agregar capítulo a temporada. Ahora adaptado para indicar envío masivo."""
     user_id = update.message.from_user.id
     if user_id not in current_series:
         await update.message.reply_text("❌ No hay serie en creación. Usa /crear_serie primero.")
         return
     args = context.args
     if len(args) < 1 or not args[0].isdigit():
-        await update.message.reply_text("❌ Usa /agregar_capitulo N y envía el video en el mismo mensaje o tras este comando.")
+        await update.message.reply_text("❌ Usa /agregar_capitulo N y envía el/los video(s) de los capítulos en un álbum o individualmente.")
         return
     temporada_num = args[0]
     temporada_key = f"T{temporada_num}"
@@ -770,17 +778,22 @@ async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if temporada_key not in serie["temporadas"]:
         await update.message.reply_text(f"❌ La temporada {temporada_num} no existe. Añádela con /agregar_temporada {temporada_num}")
         return
-    # Esperamos que el siguiente mensaje sea un video (podríamos mejorar con un estado, pero simplificamos)
+    
     await update.message.reply_text(
-        f"📽️ Por favor envía ahora el video para el capítulo de la temporada {temporada_num}."
+        f"📽️ Por favor envía ahora el/los video(s) para los capítulos de la temporada {temporada_num}. Puedes enviar un álbum de hasta 10 videos."
     )
-    # Guardamos temporada activa para el usuario para el siguiente video
+    # Guardamos temporada activa para el usuario para el siguiente video(s)
     serie["temporada_activa"] = temporada_key
 
 async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Para recibir video y asignarlo como capítulo si el usuario está en proceso de agregar capítulo a temporada."""
+    """
+    Para recibir video(s) y asignarlo(s) como capítulo(s)
+    si el usuario está en proceso de agregar capítulo a temporada.
+    Maneja tanto videos individuales como álbumes.
+    """
     msg = update.message
     user_id = msg.from_user.id
+
     if user_id not in current_series:
         # No estamos en proceso de crear capítulo, manejar como video individual
         await recibir_video(update, context)
@@ -792,15 +805,31 @@ async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE
         await recibir_video(update, context)
         return
 
-    if not msg.video:
+    temporada_key = serie["temporada_activa"]
+    
+    videos_added = 0
+    if msg.media_group_id and msg.video: # Es parte de un álbum
+        # Los videos en un álbum llegan como mensajes individuales con el mismo media_group_id
+        # Para evitar duplicados y procesar solo una vez por álbum, podríamos usar un cache temporal
+        # Simple approach: solo añadir si no está ya en la lista (no es perfecto si hay reenvíos idénticos)
+        if msg.video.file_id not in serie["temporadas"][temporada_key]:
+            serie["temporadas"][temporada_key].append(msg.video.file_id)
+            videos_added = 1
+    elif msg.video: # Es un video individual
+        serie["temporadas"][temporada_key].append(msg.video.file_id)
+        videos_added = 1
+    else:
         await msg.reply_text("❌ Envía un video válido para el capítulo.")
         return
 
-    temporada_key = serie["temporada_activa"]
-    video_id = msg.video.file_id
-    serie["temporadas"][temporada_key].append(video_id)
+    if videos_added > 0:
+        total_chapters = len(serie["temporadas"][temporada_key])
+        await msg.reply_text(
+            f"✅ Capítulo(s) agregado(s) a la temporada {temporada_key[1:]}. "
+            f"Total capítulos en esta temporada: {total_chapters}.\n"
+            f"Usa /finalizar_serie para guardar la serie o /agregar_capitulo {temporada_key[1:]} para añadir más capítulos."
+        )
 
-    await msg.reply_text(f"✅ Capítulo agregado a la temporada {temporada_key[1:]}. Usa /finalizar_serie para guardar la serie o /agregar_capitulo {temporada_key[1:]} para añadir otro capítulo.")
 
 async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Finaliza y guarda la serie creada en Firestore y memoria."""
@@ -890,7 +919,8 @@ app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_p
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 
 # Reemplazamos handler video privado para que gestione video capítulos serie o video normal
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
+# Este handler capturará tanto videos individuales como aquellos que forman parte de un media_group (álbum)
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE | filters.PHOTO & filters.ChatType.PRIVATE, recibir_video_serie))
 
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
 
