@@ -19,7 +19,7 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     PreCheckoutQueryHandler,
-    filters,
+    filters, # Importa filters
 )
 
 import firebase_admin
@@ -1128,29 +1128,25 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         known_chats.add(chat_id)
         save_data() # Guardar los chats conocidos cuando un nuevo usuario envía un mensaje
 
-    # Si el mensaje proviene de un admin en un estado específico
-    user_id = update.effective_user.id
-    if is_admin(user_id):
-        current_state = context.user_data.get("state")
-        if current_state == "waiting_for_movie_caption":
-            await admin_receive_movie_caption(update, context)
-        elif current_state == "waiting_for_serie_title":
-            await admin_receive_serie_title(update, context)
-        elif current_state == "waiting_for_serie_caption":
-            await admin_receive_serie_caption(update, context)
-        elif current_state == "waiting_for_temporada_number":
-            await admin_receive_temporada_number(update, context)
-        elif current_state == "waiting_for_broadcast_message":
-            await admin_receive_broadcast_message(update, context)
+    # Si el mensaje proviene de un admin en un estado específico,
+    # estas funciones ahora serán llamadas por sus MessageHandlers específicos
+    # y no por este handler general, a menos que sea un comando.
+
     # Para cualquier otro mensaje de texto de usuario normal, si no está verificado,
     # su mensaje de texto podría ser el intento de "verificar"
     # o simplemente enviar algo. Podríamos repetir el mensaje de verificación.
-    elif not user_verified.get(update.effective_user.id):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) and not user_verified.get(user_id):
         pass # La función start() ya maneja esto al inicio.
 
 
 # --- Manejo de fotos genéricas (para añadir contenido) ---
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Este handler solo se activará si el filtro `filters.PHOTO & filters.User(ADMIN_IDS)`
+    # es el único que lo captura. La lógica de estado se manejará dentro.
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return # Doble chequeo, aunque el filtro ya lo haría
+
     # Si el estado es para recibir foto de película (admin)
     if context.user_data.get("state") == "waiting_for_movie_photo":
         await admin_receive_movie_photo(update, context)
@@ -1159,10 +1155,16 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await admin_receive_serie_photo(update, context)
     else:
         # Aquí puedes poner un mensaje para fotos que no corresponden a un flujo
-        pass
+        await update.message.reply_text("📸 Recibí tu foto, pero no estoy esperando una foto en este momento.")
+
 
 # --- Manejo de videos genéricos (para añadir contenido) ---
 async def handle_video_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Este handler solo se activará si el filtro `filters.VIDEO & filters.User(ADMIN_IDS)`
+    # es el único que lo captura. La lógica de estado se manejará dentro.
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return # Doble chequeo
+
     # Si el estado es para recibir video de película (admin)
     if context.user_data.get("state") == "waiting_for_movie_video":
         await admin_receive_movie_video(update, context)
@@ -1171,7 +1173,7 @@ async def handle_video_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await admin_receive_capitulo_video(update, context)
     else:
         # Aquí puedes poner un mensaje para videos que no corresponden a un flujo
-        pass
+        await update.message.reply_text("🎥 Recibí tu video, pero no estoy esperando un video en este momento.")
 
 
 # --- Función para iniciar el servidor web para Render ---
@@ -1201,22 +1203,40 @@ def main():
     application.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
     application.add_handler(CallbackQueryHandler(handle_callback)) # Maneja todos los demás callbacks
 
-    # --- Handlers de Mensajes para Admin (Corregidos con filters.CREATE) ---
+    # --- Handlers de Mensajes de Administrador (Refactorizados) ---
     application.add_handler(MessageHandler(filters.PHOTO & filters.User(ADMIN_IDS), handle_photo_message))
     application.add_handler(MessageHandler(filters.VIDEO & filters.User(ADMIN_IDS), handle_video_message))
     
-    # Handler para mensajes de texto de ADMINS en estados específicos
+    # Manejadores de texto para ADMINS, filtrando por estado de user_data
+    # Usaremos funciones lambda para el filtro, que es lo más cercano a lo que querías,
+    # pero aplicado directamente en el MessageHandler, no creando un "filters.CREATE"
+    
+    # Película: Esperando sinopsis
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.User(ADMIN_IDS) & (
-            filters.COMMAND | # Capturar comandos como /finalizar_serie, /siguiente_temporada, /cancelar_difusion
-            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_movie_caption") |
-            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_serie_title") |
-            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_serie_caption") |
-            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_temporada_number") |
-            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_broadcast_message")
-        ),
-        handle_text_message,
+        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_movie_caption"),
+        admin_receive_movie_caption
     ))
+    # Serie: Esperando título
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_serie_title"),
+        admin_receive_serie_title
+    ))
+    # Serie: Esperando sinopsis
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_serie_caption"),
+        admin_receive_serie_caption
+    ))
+    # Serie: Esperando número de temporada
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_temporada_number"),
+        admin_receive_temporada_number
+    ))
+    # Difusión: Esperando mensaje
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.User(ADMIN_IDS) & (lambda msg: msg.effective_user.id in msg.application.user_data and msg.application.user_data[msg.effective_user.id].get("state") == "waiting_for_broadcast_message"),
+        admin_receive_broadcast_message
+    ))
+
 
     # --- Handlers de Pagos ---
     application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
@@ -1231,6 +1251,7 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
 
     # --- Handler para mensajes de texto genéricos (de usuarios normales y admins que no están en un estado específico de flujo) ---
+    # Este debe ir al final para que los handlers más específicos tengan prioridad.
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
 
