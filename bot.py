@@ -64,6 +64,7 @@ user_daily_views = {}       # {user_id: {date: count}}
 content_packages = {}       # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
 current_photo = {}
+user_verified = {}          # {user_id: True} si el usuario ya se verificó
 
 # NUEVO: series con temporadas y capítulos
 series_data = {}            # {serie_id: {"title", "photo_id", "caption", "temporadas": {T1: [video_id, ...], ...}}}
@@ -75,6 +76,7 @@ COLLECTION_VIDEOS = "videos"
 COLLECTION_VIEWS = "user_daily_views"
 COLLECTION_CHATS = "known_chats"
 COLLECTION_SERIES = "series_data"   # NUEVO para series
+COLLECTION_VERIFIED_USERS = "verified_users" # NUEVO para usuarios verificados
 
 # --- Funciones Firestore (Síncronas) ---
 def save_user_premium_firestore():
@@ -151,21 +153,40 @@ def load_series_firestore():
         result[doc.id] = doc.to_dict()
     return result
 
+# NUEVO: Guardar y cargar usuarios verificados
+def save_user_verified_firestore():
+    batch = db.batch()
+    for uid, verified_status in user_verified.items():
+        doc_ref = db.collection(COLLECTION_VERIFIED_USERS).document(str(uid))
+        batch.set(doc_ref, {"verified": verified_status})
+    batch.commit()
+
+def load_user_verified_firestore():
+    docs = db.collection(COLLECTION_VERIFIED_USERS).stream()
+    result = {}
+    for doc in docs:
+        data = doc.to_dict()
+        result[int(doc.id)] = data.get("verified", False)
+    return result
+
+
 # --- Guardar y cargar todo ---
 def save_data():
     save_user_premium_firestore()
     save_videos_firestore()
     save_user_daily_views_firestore()
     save_known_chats_firestore()
-    save_series_firestore()  # NUEVO
+    save_series_firestore()
+    save_user_verified_firestore() # NUEVO
 
 def load_data():
-    global user_premium, content_packages, user_daily_views, known_chats, series_data
+    global user_premium, content_packages, user_daily_views, known_chats, series_data, user_verified
     user_premium = load_user_premium_firestore()
     content_packages = load_videos_firestore()
     user_daily_views = load_user_daily_views_firestore()
     known_chats = load_known_chats_firestore()
-    series_data = load_series_firestore()  # NUEVO
+    series_data = load_series_firestore()
+    user_verified = load_user_verified_firestore() # NUEVO
 
 # --- Planes ---
 FREE_LIMIT_VIDEOS = 10
@@ -252,7 +273,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
 
-    # --- Nueva lógica para el paso intermedio de videos individuales ---
+    # --- Lógica para el paso intermedio de videos individuales (mantener) ---
     if args and args[0].startswith("content_"):
         pkg_id = args[0].split("_")[1]
         pkg = content_packages.get(pkg_id)
@@ -260,7 +281,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Contenido no disponible o eliminado.")
             return
 
-        # Mostrar la sinopsis y foto nuevamente con un botón para ver el video
         boton_ver_video = InlineKeyboardMarkup(
             [[InlineKeyboardButton("▶️ Ver Video", callback_data=f"show_video_{pkg_id}")]]
         )
@@ -268,57 +288,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo=pkg["photo_id"],
             caption=pkg["caption"],
             reply_markup=boton_ver_video,
-            parse_mode="Markdown" # Asegúrate de que el caption se interprete correctamente si tiene formato
+            parse_mode="Markdown"
         )
+        return # Importante: salimos de la función después de manejar el parámetro content_
 
-    elif args and args[0].startswith("video_"): # Esta rama ya no debería usarse directamente para los links públicos
-        pkg_id = args[0].split("_")[1]
-        pkg = content_packages.get(pkg_id)
-        if not pkg or "video_id" not in pkg:
-            await update.message.reply_text("❌ Video no disponible.")
-            return
-
-        # Verifica suscripción a canales
-        for name, username in CHANNELS.items():
-            try:
-                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
-                if member.status not in ["member", "administrator", "creator"]:
-                    await update.message.reply_text(
-                        "🔒 Para ver este contenido debes unirte a los canales.",
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
-                                    )
-                                ],
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
-                                    )
-                                ],
-                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                            ]
-                        ),
-                    )
-                    return
-            except Exception as e:
-                logger.warning(f"Error verificando canal: {e}")
-                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
-                return
-
-        if can_view_video(user_id):
-            await register_view(user_id)
-            await update.message.reply_video(
-                video=pkg["video_id"], caption="🎬 Aquí tienes el video completo.", protect_content=not is_premium(user_id)
-            )
-        else:
-            await update.message.reply_text(
-                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
-                "💎 Compra un plan para más acceso y reenvíos ilimitados.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
-            )
-            return
     # NUEVO: manejo de argumentos para series (ej: start=serie_serieid)
     elif args and args[0].startswith("serie_"):
         serie_id = args[0].split("_", 1)[1]
@@ -337,19 +310,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(botones),
             disable_web_page_preview=True,
         )
-    else:
-        await update.message.reply_text(
-            "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
-            reply_markup=InlineKeyboardMarkup(
+        return # Importante: salimos de la función después de manejar el parámetro serie_
+
+    # --- Lógica para usuarios ya verificados ---
+    if user_verified.get(user_id):
+        await update.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
+        return # Salir si el usuario ya está verificado
+
+    # --- Flujo de verificación para usuarios no verificados ---
+    await update.message.reply_text(
+        "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
+        reply_markup=InlineKeyboardMarkup(
+            [
                 [
-                    [
-                        InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"),
-                        InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"),
-                    ],
-                    [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                ]
-            ),
-        )
+                    InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"),
+                    InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"),
+                ],
+                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
+            ]
+        ),
+    )
 
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -362,9 +342,13 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
             if member.status not in ["member", "administrator", "creator"]:
                 not_joined.append(username)
-        except:
-            not_joined.append(username)
+        except Exception as e:
+            logger.warning(f"Error verificando canal: {e}")
+            not_joined.append(username) # Asumimos que no está unido si hay error
+
     if not not_joined:
+        user_verified[user_id] = True # Marcar como verificado
+        save_data() # Guardar el estado de verificación
         await query.edit_message_text("✅ Verificación completada. Menú disponible:")
         await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
     else:
@@ -453,9 +437,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Nueva lógica para mostrar el video individual después del paso intermedio ---
     elif data.startswith("show_video_"):
-        # CORRECCIÓN AQUÍ: Usar rsplit para dividir correctamente
-        # `data.rsplit('_', 1)` asegura que solo se divida en el último '_'
-        # Ejemplo: "show_video_xyz123" -> ['show_video', 'xyz123']
         prefix, pkg_id = data.rsplit('_', 1)
         
         pkg = content_packages.get(pkg_id)
@@ -489,11 +470,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await register_view(user_id)
             await query.message.reply_video(
                 video=pkg["video_id"],
-                caption=f"🎬 *{pkg['caption'].splitlines()[0]}*", # Usamos la primera línea de la sinopsis como título
+                caption=f"🎬 *{pkg['caption'].splitlines()[0]}*",
                 parse_mode="Markdown",
                 protect_content=not is_premium(user_id)
             )
-            # Elimina el mensaje de sinopsis intermedia para limpiar el chat
             try:
                 await query.delete_message()
             except Exception as e:
@@ -506,9 +486,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
             )
 
-    # --- CORRECCIÓN AQUÍ para el error "There is no text in the message to edit" en series ---
+    # --- Bloque para mostrar temporadas de series ---
     elif data.startswith("ver_"):
-        # formato ver_{serie_id}_{temporada}
         _, serie_id, temporada = data.split("_", 2)
         serie = series_data.get(serie_id)
         if not serie or temporada not in serie.get("temporadas", {}):
@@ -521,24 +500,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}")]
             )
         
-        # Envia un nuevo mensaje con el texto y los botones de la temporada
         await query.message.reply_text(
             f"📺 Capítulos de Temporada {temporada[1:]}:",
             reply_markup=InlineKeyboardMarkup(botones)
         )
         
-        # Elimina el mensaje anterior. Si el mensaje anterior era un video,
-        # esto evita el error de "no text to edit". Si era texto, simplemente lo elimina.
         try:
             await query.delete_message()
         except Exception as e:
-            # Si hay un error (ej. el mensaje ya fue eliminado o no se puede eliminar), lo registramos.
             logger.warning(f"No se pudo eliminar el mensaje anterior en 'ver_': {e}")
 
 
     # --- Bloque para mostrar video capítulo con navegación y seguridad de reenvíos ---
     elif data.startswith("cap_"):
-        # formato cap_{serie_id}_{temporada}_{indice}
         _, serie_id, temporada, index = data.split("_")
         index = int(index)
         serie = series_data.get(serie_id)
@@ -553,13 +527,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Verificar suscripción a canales antes de permitir ver el capítulo
-        user_id = query.from_user.id
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
                 if member.status not in ["member", "administrator", "creator"]:
                     await query.answer("🔒 Para ver este contenido debes unirte a los canales.", show_alert=True)
-                    # Opcional: mostrar botones para unirse a los canales y verificar
                     await query.message.reply_text(
                         "🔒 Para ver este contenido debes unirte a los canales.",
                         reply_markup=InlineKeyboardMarkup(
@@ -576,9 +548,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("❌ Error al verificar canales. Intenta más tarde.", show_alert=True)
                 return
 
-        # --- Lógica de límite diario y suscripción Premium (ya estaba implementada) ---
         if can_view_video(user_id):
-            await register_view(user_id) # Registra la vista si el usuario puede ver el video
+            await register_view(user_id)
             video_id = capitulos[index]
 
             botones_navegacion = []
@@ -587,30 +558,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if index < total - 1:
                 botones_navegacion.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{temporada}_{index + 1}"))
             
-            markup_buttons = [botones_navegacion] # Primera fila con navegación de capítulos
-            # Botón "Volver Temporada" en una nueva fila
+            markup_buttons = [botones_navegacion]
             markup_buttons.append([InlineKeyboardButton("🔙 Volver Temporada", callback_data=f"ver_{serie_id}_{temporada}")]), 
 
             markup = InlineKeyboardMarkup(markup_buttons)
 
-            # Enviar video con protección de contenido según el estado premium
-            await query.message.reply_video( # Usamos reply_video para enviar un nuevo mensaje
+            await query.message.reply_video(
                 video=video_id,
                 caption=f"📺 *{serie['title']}*\n\nTemporada {temporada[1:]} Capítulo {index+1}",
                 parse_mode="Markdown",
                 reply_markup=markup,
-                protect_content=not is_premium(user_id) # Aquí aplicamos la protección de contenido
+                protect_content=not is_premium(user_id)
             )
-            # Elimina el mensaje anterior (capítulos o capítulo previo) para evitar duplicados.
             try:
                 await query.delete_message()
             except Exception as e:
                 logger.warning(f"No se pudo eliminar el mensaje anterior en 'cap_': {e}")
 
         else:
-            # Si el usuario NO puede ver el video (límite alcanzado o no Premium)
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
-            await query.message.reply_text( # Envía un nuevo mensaje con la opción de planes
+            await query.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
                 "💎 Compra un plan para más acceso y reenvíos ilimitados.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
@@ -664,7 +631,6 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_data()
 
-    # --- MODIFICACIÓN AQUÍ: El botón del grupo redirige a la nueva ruta 'content_' ---
     boton = InlineKeyboardMarkup(
         [
             [
