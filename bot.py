@@ -252,7 +252,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
 
-    if args and args[0].startswith("video_"):
+    # --- Nueva lógica para el paso intermedio de videos individuales ---
+    if args and args[0].startswith("content_"):
+        pkg_id = args[0].split("_")[1]
+        pkg = content_packages.get(pkg_id)
+        if not pkg:
+            await update.message.reply_text("❌ Contenido no disponible o eliminado.")
+            return
+
+        # Mostrar la sinopsis y foto nuevamente con un botón para ver el video
+        boton_ver_video = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("▶️ Ver Video", callback_data=f"show_video_{pkg_id}")]]
+        )
+        await update.message.reply_photo(
+            photo=pkg["photo_id"],
+            caption=pkg["caption"],
+            reply_markup=boton_ver_video,
+            parse_mode="Markdown" # Asegúrate de que el caption se interprete correctamente si tiene formato
+        )
+
+    elif args and args[0].startswith("video_"): # Esta rama ya no debería usarse directamente para los links públicos
         pkg_id = args[0].split("_")[1]
         pkg = content_packages.get(pkg_id)
         if not pkg or "video_id" not in pkg:
@@ -432,7 +451,58 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
 
-    # --- CORRECCIÓN AQUÍ para el error "There is no text in the message to edit" ---
+    # --- Nueva lógica para mostrar el video individual después del paso intermedio ---
+    elif data.startswith("show_video_"):
+        _, pkg_id = data.split("_")
+        pkg = content_packages.get(pkg_id)
+        if not pkg:
+            await query.message.reply_text("❌ Video no disponible o eliminado.")
+            return
+
+        # Verificar suscripción a canales antes de permitir ver el video
+        for name, username in CHANNELS.items():
+            try:
+                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+                if member.status not in ["member", "administrator", "creator"]:
+                    await query.answer("🔒 Para ver este contenido debes unirte a los canales.", show_alert=True)
+                    await query.message.reply_text(
+                        "🔒 Para ver este contenido debes unirte a los canales.",
+                        reply_markup=InlineKeyboardMarkup(
+                            [
+                                [InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}")],
+                                [InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}")],
+                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
+                            ]
+                        ),
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"Error verificando canal para video individual: {e}")
+                await query.answer("❌ Error al verificar canales. Intenta más tarde.", show_alert=True)
+                return
+
+        if can_view_video(user_id):
+            await register_view(user_id)
+            await query.message.reply_video(
+                video=pkg["video_id"],
+                caption=f"🎬 *{pkg['caption'].splitlines()[0]}*", # Usamos la primera línea de la sinopsis como título
+                parse_mode="Markdown",
+                protect_content=not is_premium(user_id)
+            )
+            # Elimina el mensaje de sinopsis intermedia para limpiar el chat
+            try:
+                await query.delete_message()
+            except Exception as e:
+                logger.warning(f"No se pudo eliminar el mensaje de sinopsis intermedia: {e}")
+        else:
+            await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
+            await query.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
+                "💎 Compra un plan para más acceso y reenvíos ilimitados.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
+
+    # --- CORRECCIÓN AQUÍ para el error "There is no text in the message to edit" en series ---
     elif data.startswith("ver_"):
         # formato ver_{serie_id}_{temporada}
         _, serie_id, temporada = data.split("_", 2)
@@ -590,11 +660,12 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_data()
 
+    # --- MODIFICACIÓN AQUÍ: El botón del grupo redirige a la nueva ruta 'content_' ---
     boton = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "▶️ Ver video completo", url=f"https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}"
+                    "Ver Contenido", url=f"https://t.me/{(await context.bot.get_me()).username}?start=content_{pkg_id}"
                 )
             ]
         ]
@@ -790,7 +861,7 @@ app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
 app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 
-# NUEVO: Reemplazamos handler video privado para que gestione video capítulos serie o video normal
+# Reemplazamos handler video privado para que gestione video capítulos serie o video normal
 app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
 
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
