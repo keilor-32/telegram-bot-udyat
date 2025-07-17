@@ -366,7 +366,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
+        "👋 hola debes unirte a todos nuestros canales para usar nuestro bot, una ves te hayas unido has click  en verificar suscripcion para continuar.",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
