@@ -327,7 +327,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_photo(
             photo=pkg["photo_id"],
-            caption=escape_for_telegram_markdown(pkg["caption"]), # <--- CORREGIDO AQUÍ
+            caption=escape_for_telegram_markdown(pkg["caption"]),
             reply_markup=boton_ver_video,
             parse_mode="Markdown"
         )
@@ -1201,7 +1201,7 @@ def main():
     application.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
     application.add_handler(CallbackQueryHandler(handle_callback)) # Maneja todos los demás callbacks
 
-    # --- Handlers de Mensajes para Admin (Corregidos con filters.Status) ---
+    # --- Handlers de Mensajes para Admin (Corregidos con filters.CREATE) ---
     application.add_handler(MessageHandler(filters.PHOTO & filters.User(ADMIN_IDS), handle_photo_message))
     application.add_handler(MessageHandler(filters.VIDEO & filters.User(ADMIN_IDS), handle_video_message))
     
@@ -1209,11 +1209,11 @@ def main():
     application.add_handler(MessageHandler(
         filters.TEXT & filters.User(ADMIN_IDS) & (
             filters.COMMAND | # Capturar comandos como /finalizar_serie, /siguiente_temporada, /cancelar_difusion
-            filters.Status("waiting_for_movie_caption") |
-            filters.Status("waiting_for_serie_title") |
-            filters.Status("waiting_for_serie_caption") |
-            filters.Status("waiting_for_temporada_number") |
-            filters.Status("waiting_for_broadcast_message")
+            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_movie_caption") |
+            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_serie_title") |
+            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_serie_caption") |
+            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_temporada_number") |
+            filters.CREATE(lambda _, __, c: c.user_data.get("state") == "waiting_for_broadcast_message")
         ),
         handle_text_message,
     ))
