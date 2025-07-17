@@ -81,9 +81,9 @@ COLLECTION_VERIFIED_USERS = "verified_users" # NUEVO para usuarios verificados
 # --- Funciones Firestore (Síncronas) ---
 def save_user_premium_firestore():
     batch = db.batch()
-    for uid, exp in user_premium.items():
+    for uid, exp_data in user_premium.items():
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
-        batch.set(doc_ref, {"expire_at": exp.isoformat()})
+        batch.set(doc_ref, exp_data) # Guardar todo el diccionario
     batch.commit()
 
 def load_user_premium_firestore():
@@ -92,8 +92,10 @@ def load_user_premium_firestore():
     for doc in docs:
         data = doc.to_dict()
         try:
-            expire_at = datetime.fromisoformat(data.get("expire_at"))
-            result[int(doc.id)] = expire_at
+            # Asegurarse de que expire_at se convierta a datetime
+            if "expire_at" in data:
+                data["expire_at"] = datetime.fromisoformat(data["expire_at"])
+            result[int(doc.id)] = data
         except Exception:
             pass
     return result
@@ -217,7 +219,21 @@ PLAN_ULTRA_ITEM = {
 
 # --- Control acceso ---
 def is_premium(user_id):
-    return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
+    if user_id in user_premium and "expire_at" in user_premium[user_id]:
+        return user_premium[user_id]["expire_at"] > datetime.utcnow()
+    return False
+
+def get_user_plan_name(user_id):
+    if is_premium(user_id):
+        plan_data = user_premium.get(user_id, {})
+        plan_type = plan_data.get("plan_type", "premium_plan") # Default a 'premium_plan' si no está
+        if plan_type == PLAN_PRO_ITEM["payload"]:
+            return PLAN_PRO_ITEM["title"]
+        elif plan_type == PLAN_ULTRA_ITEM["payload"]:
+            return PLAN_ULTRA_ITEM["title"]
+        else:
+            return PREMIUM_ITEM["title"] # Por compatibilidad si no se guarda el tipo
+    return "Gratis"
 
 def can_view_video(user_id):
     if is_premium(user_id):
@@ -386,7 +402,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "planes":
         texto_planes = (
             f"💎 *Planes disponibles:*\n\n"
-            f"🔹 Free – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n"
+            f"🔹 Gratis – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n"
             "🔸 *Plan Pro*\n"
             "Precio: 40 estrellas\n"
             "Beneficios: 50 videos diarios, sin reenvíos ni compartir.\n\n"
@@ -405,8 +421,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_pro":
         if is_premium(user_id):
-            exp = user_premium[user_id].strftime("%Y-%m-%d")
-            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
+            exp_data = user_premium.get(user_id, {})
+            exp = exp_data.get("expire_at", datetime.min).strftime("%Y-%m-%d")
+            plan_name = get_user_plan_name(user_id)
+            await query.message.reply_text(f"✅ Ya tienes el plan *{plan_name}* activo hasta {exp}.", parse_mode="Markdown")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -421,8 +439,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_ultra":
         if is_premium(user_id):
-            exp = user_premium[user_id].strftime("%Y-%m-%d")
-            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
+            exp_data = user_premium.get(user_id, {})
+            exp = exp_data.get("expire_at", datetime.min).strftime("%Y-%m-%d")
+            plan_name = get_user_plan_name(user_id)
+            await query.message.reply_text(f"✅ Ya tienes el plan *{plan_name}* activo hasta {exp}.", parse_mode="Markdown")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -436,11 +456,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "perfil":
-        plan = "Premium" if is_premium(user_id) else "Free"
-        exp = user_premium.get(user_id)
+        plan_name = get_user_plan_name(user_id)
+        exp_data = user_premium.get(user_id, {})
+        exp = exp_data.get("expire_at")
+        
         await query.message.reply_text(
             f"🧑 Perfil:\n• {user.full_name}\n• @{user.username or 'Sin usuario'}\n"
-            f"• ID: {user_id}\n• Plan: {plan}\n• Expira: {exp.strftime('%Y-%m-%d') if exp else 'N/A'}",
+            f"• ID: {user_id}\n• Plan: *{plan_name}*\n• Expira: {exp.strftime('%Y-%m-%d') if exp else 'N/A'}",
+            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]),
         )
 
@@ -656,11 +679,23 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
-    if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
-        expire_at = datetime.utcnow() + timedelta(days=30)
-        user_premium[user_id] = expire_at
-        save_data()
-        await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
+    
+    expire_at = datetime.utcnow() + timedelta(days=30)
+    user_premium[user_id] = {
+        "expire_at": expire_at,
+        "plan_type": payload # Guarda el tipo de plan adquirido
+    }
+    save_data()
+    
+    plan_name = "tu plan"
+    if payload == PLAN_PRO_ITEM["payload"]:
+        plan_name = PLAN_PRO_ITEM["title"]
+    elif payload == PLAN_ULTRA_ITEM["payload"]:
+        plan_name = PLAN_ULTRA_ITEM["title"]
+    elif payload == PREMIUM_ITEM["payload"]:
+        plan_name = PREMIUM_ITEM["title"]
+
+    await update.message.reply_text(f"🎉 ¡Gracias por tu compra! Tu *{plan_name}* se activó por 30 días.", parse_mode="Markdown")
 
 # --- Recepción contenido (sinopsis + video) ---
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
