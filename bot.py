@@ -11,6 +11,7 @@ from telegram import (
     InlineKeyboardMarkup,
     LabeledPrice,
     InputMediaVideo,
+    Chat, # Importar Chat para ChatType
 )
 from telegram.ext import (
     Application,
@@ -982,13 +983,8 @@ async def list_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No hay chats en la lista de difusión.")
 
 # --- Funciones de administración (control de acceso simplificado) ---
-async def admin_check_decorator(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not is_admin(update.effective_user.id):
-            await update.message.reply_text("🚫 No tienes permisos de administrador para usar este comando.")
-            return
-        return await func(update, context)
-    return wrapper
+# En lugar de un decorador, lo hacemos directamente en los handlers
+# para simplificar el ejemplo.
 
 # --- Función para cargar datos al iniciar el bot ---
 async def on_startup(application: Application):
@@ -1012,9 +1008,9 @@ def main():
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
     # Handlers para recibir contenido (solo para admins)
-    # Corrección: Usamos filters.PRIVATE_CHATS para los chats privados
-    application.add_handler(MessageHandler(filters.PHOTO & filters.PRIVATE_CHATS, recibir_foto))
-    application.add_handler(MessageHandler(filters.VIDEO & filters.PRIVATE_CHATS, recibir_video))
+    # CORRECCIÓN FINAL: Usamos filters.ChatType.PRIVATE para los chats privados
+    application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
+    application.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
 
     # Handlers para creación de series (solo para admins)
     application.add_handler(CommandHandler("crear_serie", crear_serie))
