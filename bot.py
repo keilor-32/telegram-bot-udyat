@@ -287,8 +287,8 @@ def get_main_menu():
                 InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
             ],
             [
-                InlineKeyboardButton("📢 peliculas", url="https://t.me/+dVTzx8dMGf81NTcx"),
-                InlineKeyboardButton("👥 series", url="https://t.me/+qiFtv2EmV-xmNWFh"),
+                InlineKeyboardButton("🎬 peliculas", url="https://t.me/+dVTzx8dMGf81NTcx"),
+                InlineKeyboardButton("🎬 series", url="https://t.me/+qiFtv2EmV-xmNWFh"),
             ],
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
