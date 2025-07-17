@@ -67,15 +67,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Variables en memoria (se cargarán desde Firestore) ---
-user_premium = {}           # {user_id: {"expire_at": datetime, "plan_type": "payload"}}
-user_daily_views = {}       # {user_id: {date: count}}
-content_packages = {}       # {pkg_id: {photo_id, caption, video_id}}
-known_chats = set()         # IDs de chats a los que se difunde contenido
-current_photo = {}          # Para guardar la foto y sinopsis temporalmente antes de un video/serie
-user_verified = {}          # {user_id: True} si el usuario ya se verificó con los canales
+user_premium = {}             # {user_id: {"expire_at": datetime, "plan_type": "payload"}}
+user_daily_views = {}         # {user_id: {date: count}}
+content_packages = {}         # {pkg_id: {photo_id, caption, video_id}}
+known_chats = set()           # IDs de chats a los que se difunde contenido
+current_photo = {}            # Para guardar la foto y sinopsis temporalmente antes de un video/serie
+user_verified = {}            # {user_id: True} si el usuario ya se verificó con los canales
 
-series_data = {}            # {serie_id: {"title", "photo_id", "caption", "temporadas": {T1: [video_id, ...], ...}}}
-current_series = {}         # {user_id: {"serie_id", "title", "photo_id", "caption", "temporadas": {}}} para creación
+series_data = {}              # {serie_id: {"title", "photo_id", "caption", "temporadas": {T1: [video_id, ...], ...}}}
+current_series = {}           # {user_id: {"serie_id", "title", "photo_id", "caption", "temporadas": {}}} para creación
 
 # --- Nombres de Colecciones de Firestore ---
 COLLECTION_USERS = "users_premium"
@@ -302,6 +302,9 @@ def escape_for_telegram_markdown(text: str) -> str:
     text = text.replace("*", "\\*")
     text = text.replace("`", "\\`")
     text = text.replace("[", "\\[")
+    # Es importante escapar los corchetes y paréntesis también si se usan en URLs de Markdown
+    # pero aquí solo estamos enfocándonos en el texto general.
+    # Si tu texto contiene URLs de Markdown, asegúrate de que estén bien formadas.
     return text
 
 # --- Handlers del Bot ---
@@ -324,7 +327,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_photo(
             photo=pkg["photo_id"],
-            caption=pkg["caption"],
+            caption=escape_for_telegram_markdown(pkg["caption"]), # <--- CORREGIDO AQUÍ
             reply_markup=boton_ver_video,
             parse_mode="Markdown"
         )
@@ -496,10 +499,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         vistas_info = f"• Vistas hoy: {vistas_hoy}/{FREE_LIMIT_VIDEOS}" if not is_premium(user_id) else "• Vistas: Ilimitadas"
 
-        # --- CORRECCIÓN PARA EL BOTÓN PERFIL: ESCAPAR NOMBRES DE USUARIO ---
+        # --- CORRECCIÓN PARA EL BOTÓN PERFIL: ESCAPAR NOMBRES DE USUARIO Y PLAN ---
         escaped_full_name = escape_for_telegram_markdown(user.full_name)
         user_username_display = user.username or 'Sin usuario'
         escaped_username_display = escape_for_telegram_markdown(user_username_display)
+        # Asegurarse de que el nombre del plan también se escape, ya que se muestra en negrita
+        escaped_plan_actual = escape_for_telegram_markdown(plan_actual)
         # --- FIN DE LA CORRECCIÓN ---
 
         await query.message.reply_text(
@@ -507,7 +512,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Nombre: {escaped_full_name}\n"
             f"• Usuario: @{escaped_username_display}\n"
             f"• ID: `{user_id}`\n"
-            f"• Plan: **{escape_for_telegram_markdown(plan_actual)}**\n" # También escapar el nombre del plan
+            f"• Plan: **{escaped_plan_actual}**\n" # Usar el nombre del plan escapado
             f"• Expira: {expiracion}\n"
             f"{vistas_info}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")]]),
@@ -606,6 +611,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(botones),
             parse_mode="Markdown"
         )
+        
         try:
             await query.delete_message()
         except Exception as e:
@@ -727,346 +733,534 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- Manejo de Pagos ---
-async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja la verificación previa al pago."""
-    await update.pre_checkout_query.answer(ok=True) # Siempre responde OK para permitir el pago
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Responde a las pre-consultas de pago (pre-checkout query)."""
+    query = update.pre_checkout_query
+    # Verificar que el payload sea uno de los conocidos
+    if query.invoice_payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
+        await query.answer(ok=True)
+    else:
+        await query.answer(ok=False, error_message="Algo salió mal con tu compra. Por favor, intenta de nuevo más tarde.")
 
-async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Maneja los pagos exitosos."""
-    user_id = update.effective_user.id
+    user_id = update.message.from_user.id
     payload = update.message.successful_payment.invoice_payload
-    
-    plan_adquirido_title = PLAN_PAYLOAD_TO_TITLE.get(payload, "Plan Desconocido")
+    currency = update.message.successful_payment.currency
+    total_amount = update.message.successful_payment.total_amount / 100 # Convertir de céntimos/menor unidad
 
+    # Determinar la duración del plan (30 días para todos por ahora)
     expire_at = datetime.now(timezone.utc) + timedelta(days=30)
 
     user_premium[user_id] = {"expire_at": expire_at, "plan_type": payload}
-    save_data()
-    await update.message.reply_text(f"🎉 ¡Gracias por tu compra! Tu **{escape_for_telegram_markdown(plan_adquirido_title)}** se activó por 30 días.", parse_mode="Markdown")
+    save_data() # Guardar el estado premium en Firestore
 
-# --- Recepción de Contenido (Sinopsis y Video/Series) ---
-async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler para recibir una foto con sinopsis (paso previo a enviar video o crear serie)."""
-    msg = update.message
-    user_id = msg.from_user.id
-    if not is_admin(user_id):
-        await msg.reply_text("🚫 No tienes permiso para agregar contenido. Este comando es solo para administradores.")
-        return
+    plan_title = PLAN_PAYLOAD_TO_TITLE.get(payload, "Plan Premium")
 
-    if msg.photo and msg.caption:
-        current_photo[user_id] = {
-            "photo_id": msg.photo[-1].file_id,
-            "caption": msg.caption,
-        }
-        await msg.reply_text("✅ Sinopsis recibida. Ahora envía el **video** o usa \/crear_serie para series.", parse_mode="Markdown")
-    else:
-        await msg.reply_text("❌ Envía una imagen con sinopsis para agregar contenido.")
-
-async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler para recibir un video después de una sinopsis (para contenido individual)."""
-    msg = update.message
-    user_id = msg.from_user.id
-    if not is_admin(user_id):
-        await msg.reply_text("🚫 No tienes permiso para agregar contenido. Este comando es solo para administradores.")
-        return
-
-    if user_id not in current_photo:
-        await msg.reply_text("❌ Primero envía una sinopsis con imagen y descripción usando el comando de subir foto.")
-        return
-
-    pkg_id = str(int(datetime.now(timezone.utc).timestamp())) # ID único basado en el tiempo
-    photo_id = current_photo[user_id]["photo_id"]
-    caption = current_photo[user_id]["caption"]
-    video_id = msg.video.file_id
-
-    content_packages[pkg_id] = {
-        "photo_id": photo_id,
-        "caption": caption,
-        "video_id": video_id,
-    }
-    del current_photo[user_id] # Limpiamos el estado temporal del admin
-
-    save_data()
-
-    bot_info = await context.bot.get_me()
-    boton = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "▶️ Ver Contenido", url=f"https://t.me/{bot_info.username}?start=content_{pkg_id}"
-                )
-            ]
-        ]
-    )
-    
-    # Envía el contenido a todos los chats conocidos para difusión
-    for chat_id in known_chats:
-        try:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=photo_id,
-                caption=caption, # La sinopsis ya debe venir escapada si es contenido de usuario
-                reply_markup=boton,
-                protect_content=True, # Siempre protege el contenido al difundir
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.warning(f"No se pudo enviar contenido a chat {chat_id}: {e}")
-
-    await msg.reply_text("✅ Contenido enviado a los grupos de difusión.")
-
-# --- Comandos para Gestión de Series ---
-
-async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inicia el proceso de creación de una nueva serie."""
-    user_id = update.message.from_user.id
-    if not is_admin(user_id):
-        await update.message.reply_text("🚫 No tienes permiso para crear series. Este comando es solo para administradores.")
-        return
-
-    if user_id not in current_photo:
-        await update.message.reply_text("❌ Primero envía la sinopsis con imagen y descripción de la serie, luego usa \/crear_serie.", parse_mode="Markdown")
-        return
-    
-    serie_id = str(int(datetime.now(timezone.utc).timestamp()))
-    data = current_photo[user_id]
-    current_series[user_id] = {
-        "serie_id": serie_id,
-        "title": data["caption"].split("\n")[0],  # Toma la primera línea del caption como título
-        "photo_id": data["photo_id"],
-        "caption": data["caption"],
-        "temporadas": {}, # Diccionario para almacenar capítulos por temporada
-    }
-    del current_photo[user_id] # Limpia la foto/caption temporal
     await update.message.reply_text(
-        "✅ Serie iniciada. Ahora, usa \/agregar_temporada N (ej. `\/agregar_temporada 1`) para añadir una temporada.",
+        f"🎉 ¡Pago de **{escape_for_telegram_markdown(plan_title)}** recibido exitosamente!\n"
+        f"Monto: {total_amount} {currency}\n"
+        f"Tu suscripción es válida hasta: `{expire_at.strftime('%Y-%m-%d %H:%M UTC')}`\n"
+        "¡Gracias por tu compra!",
         parse_mode="Markdown"
     )
 
-async def agregar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Añade una nueva temporada a la serie en creación."""
-    user_id = update.message.from_user.id
-    if not is_admin(user_id):
-        await update.message.reply_text("🚫 No tienes permiso para agregar temporadas.")
-        return
-
-    if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación. Usa \/crear_serie primero.", parse_mode="Markdown")
-        return
-    
-    args = context.args
-    if not args or not args[0].isdigit():
-        await update.message.reply_text("❌ Uso: `\/agregar_temporada N` (donde N es el número de temporada, ej. `\/agregar_temporada 1`).", parse_mode="Markdown")
-        return
-    
-    temporada_num = args[0]
-    temporada_key = f"T{temporada_num}" # Formato T1, T2, etc.
-    serie = current_series[user_id]
-    
-    if temporada_key in serie["temporadas"]:
-        await update.message.reply_text(f"❌ La temporada **{temporada_num}** ya existe. Si quieres añadir capítulos a ella, usa `\/agregar_capitulo {temporada_num}`.", parse_mode="Markdown")
-        return
-    
-    serie["temporadas"][temporada_key] = [] # Inicializa la lista de capítulos para esta temporada
-    await update.message.reply_text(
-        f"✅ Temporada **{temporada_num}** agregada.\n"
-        f"Ahora envía los videos de los capítulos para esta temporada, uno por uno o en un álbum, "
-        f"y luego usa el comando `\/agregar_capitulo {temporada_num}` *después de cada envío (o álbum completo)*.",
-        parse_mode="Markdown"
-    )
-
-async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Añade un capítulo de video a la temporada actual de la serie en creación."""
-    user_id = update.message.from_user.id
-    if not is_admin(user_id):
-        await update.message.reply_text("🚫 No tienes permiso para agregar capítulos.")
-        return
-
-    if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación. Usa \/crear_serie primero.", parse_mode="Markdown")
-        return
-    
-    args = context.args
-    if not args or not args[0].isdigit():
-        await update.message.reply_text("❌ Uso: `\/agregar_capitulo N` donde N es el número de la temporada. Luego envía el\/los video(s).", parse_mode="Markdown")
-        return
-    
-    temporada_num = args[0]
-    temporada_key = f"T{temporada_num}"
-    serie = current_series[user_id]
-    
-    if temporada_key not in serie["temporadas"]:
-        await update.message.reply_text(f"❌ La temporada **{temporada_num}** no existe para esta serie. Añádela con `\/agregar_temporada {temporada_num}`.", parse_mode="Markdown")
-        return
-    
-    if update.message.video:
-        video_id = update.message.video.file_id
-        serie["temporadas"][temporada_key].append(video_id)
-        current_chapter_count = len(serie["temporadas"][temporada_key])
-        await update.message.reply_text(f"✅ Capítulo **{current_chapter_count}** añadido a Temporada **{temporada_num}**. "
-                                        f"Envía el siguiente capítulo o usa \/finalizar_serie para publicar.", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("❌ Por favor, envía un **video** para el capítulo después de usar este comando.", parse_mode="Markdown")
-
-async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Finaliza la creación de la serie y la publica en los canales de difusión."""
-    user_id = update.message.from_user.id
-    if not is_admin(user_id):
-        await update.message.reply_text("🚫 No tienes permiso para finalizar series.")
-        return
-
-    if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación para finalizar.")
-        return
-
-    serie_data_to_save = current_series[user_id]
-    serie_id = serie_data_to_save["serie_id"]
-
-    if not serie_data_to_save["temporadas"]:
-        await update.message.reply_text("❌ La serie no tiene temporadas. Añade al menos una con `\/agregar_temporada`.", parse_mode="Markdown")
-        return
-    
-    has_chapters = False
-    for temporada_capitulos in serie_data_to_save["temporadas"].values():
-        if temporada_capitulos:
-            has_chapters = True
-            break
-    
-    if not has_chapters:
-        await update.message.reply_text("❌ La serie no tiene capítulos. Añade al menos uno con `\/agregar_capitulo`.", parse_mode="Markdown")
-        return
-
-    series_data[serie_id] = serie_data_to_save
-    del current_series[user_id] # Limpia el estado temporal del admin
-    save_data() # Guarda la serie en Firestore
-
-    bot_info = await context.bot.get_me()
-    boton = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "▶️ Ver Serie", url=f"https://t.me/{bot_info.username}?start=serie_{serie_id}"
-                )
-            ]
-        ]
-    )
-
-    # Enviar la serie a los chats conocidos
-    for chat_id in known_chats:
-        try:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=serie_data_to_save["photo_id"],
-                caption=f"📺 *Nueva Serie: {escape_for_telegram_markdown(serie_data_to_save['title'])}*\n\n{escape_for_telegram_markdown(serie_data_to_save['caption'])}",
-                reply_markup=boton,
-                parse_mode="Markdown",
-                protect_content=True,
-            )
-        except Exception as e:
-            logger.warning(f"No se pudo enviar la serie a chat {chat_id}: {e}")
-
-    await update.message.reply_text("✅ Serie finalizada y publicada en los grupos de difusión.")
-
-
-# --- Funciones y Comandos de Administración de Chats ---
-# ADMIN_USER_IDS debe ser una lista de enteros con los IDs de usuario de los administradores
-ADMIN_USER_IDS = [int(uid) for uid in os.getenv("ADMIN_IDS", "").split(',') if uid]
+# --- Comandos de Administración ---
+ADMIN_IDS = [int(admin_id) for admin_id in os.getenv("ADMIN_IDS", "").split(',') if admin_id]
 
 def is_admin(user_id):
-    """Verifica si un user_id está en la lista de administradores."""
-    return user_id in ADMIN_USER_IDS
+    return user_id in ADMIN_IDS
 
-async def add_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Añade el chat actual a la lista de difusión."""
-    if not is_admin(update.effective_user.id):
+async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
         await update.message.reply_text("🚫 No tienes permiso para usar este comando.")
         return
-    chat_id = str(update.effective_chat.id)
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Añadir Película", callback_data="admin_add_movie")],
+        [InlineKeyboardButton("➕ Añadir Serie", callback_data="admin_add_serie")],
+        [InlineKeyboardButton("🗑️ Eliminar Contenido", callback_data="admin_delete_content")],
+        [InlineKeyboardButton("✉️ Difundir Mensaje", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📊 Estadísticas", callback_data="admin_stats")],
+    ])
+    await update.message.reply_text("⚙️ Panel de Administrador:", reply_markup=markup)
+
+# --- Flujo para añadir película ---
+async def admin_add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+    await context.bot.send_message(user_id, "Envía la **foto de portada** para la película. Luego te pediré la sinopsis y el video.", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_movie_photo"
+
+async def admin_receive_movie_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_movie_photo": return
+
+    photo_id = update.message.photo[-1].file_id
+    current_photo[user_id] = {"photo_id": photo_id}
+    await context.bot.send_message(user_id, "Ahora, envía la **sinopsis** de la película.", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_movie_caption"
+
+async def admin_receive_movie_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_movie_caption": return
+
+    caption = update.message.text
+    if user_id not in current_photo:
+        await context.bot.send_message(user_id, "❌ Error: Primero envía la foto de portada.")
+        context.user_data["state"] = None
+        return
+
+    current_photo[user_id]["caption"] = caption
+    await context.bot.send_message(user_id, "Finalmente, envía el **video** de la película.", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_movie_video"
+
+async def admin_receive_movie_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_movie_video": return
+
+    if not update.message.video:
+        await context.bot.send_message(user_id, "❌ Eso no parece ser un video. Por favor, envía un video válido.")
+        return
+
+    video_id = update.message.video.file_id
+    pkg_id = f"movie_{datetime.now().strftime('%Y%m%d%H%M%S')}" # ID único para el contenido
+
+    if user_id not in current_photo or "caption" not in current_photo[user_id]:
+        await context.bot.send_message(user_id, "❌ Error: La información de la película está incompleta. Por favor, reinicia el proceso.")
+        context.user_data["state"] = None
+        current_photo.pop(user_id, None)
+        return
+
+    content_packages[pkg_id] = {
+        "photo_id": current_photo[user_id]["photo_id"],
+        "caption": current_photo[user_id]["caption"],
+        "video_id": video_id
+    }
+    save_data()
+
+    # Botón para compartir el contenido
+    share_link = f"https://t.me/{context.bot.username}?start=content_{pkg_id}"
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Compartir película", url=share_link)]])
+
+    await context.bot.send_message(
+        user_id,
+        f"✅ Película '{escape_for_telegram_markdown(current_photo[user_id]['caption'].splitlines()[0])}' añadida y guardada. "
+        "Aquí está el enlace para compartir:",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+    current_photo.pop(user_id)
+    context.user_data["state"] = None
+
+# --- Flujo para añadir serie ---
+async def admin_add_serie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+    await context.bot.send_message(user_id, "Envía la **foto de portada** para la nueva serie.", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_serie_photo"
+    current_series[user_id] = {} # Inicializar el estado de la serie
+
+async def admin_receive_serie_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_serie_photo": return
+
+    photo_id = update.message.photo[-1].file_id
+    current_series[user_id]["photo_id"] = photo_id
+    await context.bot.send_message(user_id, "Ahora, envía el **título** de la serie (ej: 'Stranger Things').", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_serie_title"
+
+async def admin_receive_serie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_serie_title": return
+
+    title = update.message.text
+    current_series[user_id]["title"] = title
+    await context.bot.send_message(user_id, "Ahora, envía la **sinopsis** de la serie.", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_serie_caption"
+
+async def admin_receive_serie_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_serie_caption": return
+
+    caption = update.message.text
+    current_series[user_id]["caption"] = caption
+    current_series[user_id]["temporadas"] = {} # Inicializar temporadas
+    await context.bot.send_message(
+        user_id,
+        "Ahora envía el **número de la primera temporada** que deseas añadir (ej: 'T1', 'T2', etc.). "
+        "O puedes enviar `/finalizar_serie` si ya has terminado.",
+        parse_mode="Markdown"
+    )
+    context.user_data["state"] = "waiting_for_temporada_number"
+
+async def admin_receive_temporada_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_temporada_number": return
+
+    temporada_key = update.message.text.upper() # Convertir a mayúsculas para estandarizar (ej: T1, T2)
+    if not temporada_key.startswith("T") or not temporada_key[1:].isdigit():
+        await context.bot.send_message(user_id, "❌ Formato de temporada inválido. Usa 'T' seguido del número (ej: 'T1').")
+        return
+
+    current_series[user_id]["current_temporada"] = temporada_key
+    current_series[user_id]["temporadas"][temporada_key] = [] # Inicializar lista de capítulos
+    await context.bot.send_message(
+        user_id,
+        f"Enviando capítulos para la **Temporada {temporada_key[1:]}**.\n"
+        "Envía los videos de los capítulos uno por uno. Cuando termines con esta temporada, "
+        "envía `/siguiente_temporada` para añadir otra, o `/finalizar_serie` para guardar la serie completa.",
+        parse_mode="Markdown"
+    )
+    context.user_data["state"] = "waiting_for_capitulo_video"
+
+async def admin_receive_capitulo_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_capitulo_video": return
+
+    if not update.message.video:
+        await context.bot.send_message(user_id, "❌ Eso no parece ser un video. Por favor, envía un video válido para el capítulo.")
+        return
+
+    video_id = update.message.video.file_id
+    current_temporada = current_series[user_id].get("current_temporada")
+
+    if not current_temporada or current_temporada not in current_series[user_id]["temporadas"]:
+        await context.bot.send_message(user_id, "❌ Error: No se ha seleccionado una temporada actual. Por favor, reinicia el proceso de añadir serie.")
+        context.user_data["state"] = None
+        current_series.pop(user_id, None)
+        return
+
+    current_series[user_id]["temporadas"][current_temporada].append(video_id)
+    num_capitulos = len(current_series[user_id]["temporadas"][current_temporada])
+    await context.bot.send_message(
+        user_id,
+        f"✅ Capítulo {num_capitulos} añadido a la Temporada {current_temporada[1:]}. "
+        "Envía el siguiente capítulo, o `/siguiente_temporada` para la siguiente temporada, "
+        "o `/finalizar_serie` para guardar la serie.",
+        parse_mode="Markdown"
+    )
+
+async def admin_next_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+
+    if context.user_data.get("state") not in ["waiting_for_capitulo_video", "waiting_for_temporada_number"]:
+        await update.message.reply_text("❌ Comando inválido en este momento.")
+        return
+    
+    if user_id not in current_series or not current_series[user_id].get("photo_id"):
+        await update.message.reply_text("❌ No hay una serie en proceso de creación. Por favor, inicia con /admin_add_serie.")
+        context.user_data["state"] = None
+        current_series.pop(user_id, None)
+        return
+
+    await context.bot.send_message(user_id, "Envía el **número de la siguiente temporada** a añadir (ej: 'T2').", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_temporada_number"
+
+async def admin_finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+
+    if user_id not in current_series or not current_series[user_id].get("photo_id"):
+        await update.message.reply_text("❌ No hay una serie en proceso de creación para finalizar.")
+        context.user_data["state"] = None
+        current_series.pop(user_id, None)
+        return
+
+    serie_data_to_save = current_series[user_id].copy()
+    serie_id = f"serie_{datetime.now().strftime('%Y%m%d%H%M%S')}" # ID único para la serie
+
+    series_data[serie_id] = serie_data_to_save
+    save_data()
+
+    # Generar enlace para compartir la serie
+    share_link = f"https://t.me/{context.bot.username}?start=serie_{serie_id}"
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Compartir Serie", url=share_link)]])
+
+    await context.bot.send_message(
+        user_id,
+        f"✅ Serie '*{escape_for_telegram_markdown(serie_data_to_save['title'])}*' añadida y guardada. "
+        "Aquí está el enlace para compartir:",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+    current_series.pop(user_id)
+    context.user_data["state"] = None
+
+# --- Flujo para eliminar contenido ---
+async def admin_delete_content_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+
+    markup_buttons = []
+    # Añadir películas
+    for pkg_id, pkg_data in content_packages.items():
+        title = pkg_data.get("caption", "Sin título").splitlines()[0]
+        markup_buttons.append([InlineKeyboardButton(f"🎬 Película: {title}", callback_data=f"delete_pkg_{pkg_id}")])
+    
+    # Añadir series
+    for serie_id, serie_data in series_data.items():
+        title = serie_data.get("title", "Sin título")
+        markup_buttons.append([InlineKeyboardButton(f"📺 Serie: {title}", callback_data=f"delete_serie_{serie_id}")])
+
+    if not markup_buttons:
+        await update.message.reply_text("No hay contenido para eliminar.")
+        return
+
+    markup = InlineKeyboardMarkup(markup_buttons)
+    await update.message.reply_text("Selecciona el contenido a eliminar:", reply_markup=markup)
+
+async def admin_delete_content_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if data.startswith("delete_pkg_"):
+        pkg_id_to_delete = data.split("delete_pkg_")[1]
+        if pkg_id_to_delete in content_packages:
+            del content_packages[pkg_id_to_delete]
+            save_data()
+            await query.edit_message_text(f"✅ Película '{pkg_id_to_delete}' eliminada.")
+        else:
+            await query.edit_message_text("❌ Película no encontrada.")
+    elif data.startswith("delete_serie_"):
+        serie_id_to_delete = data.split("delete_serie_")[1]
+        if serie_id_to_delete in series_data:
+            del series_data[serie_id_to_delete]
+            save_data()
+            await query.edit_message_text(f"✅ Serie '{serie_id_to_delete}' eliminada.")
+        else:
+            await query.edit_message_text("❌ Serie no encontrada.")
+
+# --- Flujo de Difusión de Mensajes ---
+async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+    await update.message.reply_text("Envía el mensaje que deseas difundir a todos los usuarios del bot. "
+                                    "Puedes usar Markdown. Envía /cancelar_difusion para cancelar.", parse_mode="Markdown")
+    context.user_data["state"] = "waiting_for_broadcast_message"
+
+async def admin_receive_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id) or context.user_data.get("state") != "waiting_for_broadcast_message": return
+
+    if update.message.text == "/cancelar_difusion":
+        await update.message.reply_text("❌ Difusión cancelada.")
+        context.user_data["state"] = None
+        return
+
+    message_text = update.message.text
+    
+    # Obtener todos los IDs de usuario únicos de user_premium y user_daily_views
+    all_user_ids = set(user_premium.keys()).union(set(int(uid) for uid in user_daily_views.keys()))
+    
+    # Añadir los IDs de los chats conocidos (si no son ya usuarios)
+    all_user_ids.update(known_chats)
+
+    success_count = 0
+    fail_count = 0
+    for target_user_id in all_user_ids:
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=message_text,
+                parse_mode="Markdown" # Asegurarse de que el markdown en el broadcast se parse
+            )
+            success_count += 1
+            # Añadir el chat a known_chats si aún no está
+            if target_user_id not in known_chats:
+                known_chats.add(target_user_id)
+        except Exception as e:
+            logger.warning(f"No se pudo enviar mensaje a {target_user_id}: {e}")
+            fail_count += 1
+    
+    save_data() # Guardar los chats conocidos actualizados
+
+    await update.message.reply_text(f"✅ Difusión completada. Mensajes enviados a {success_count} usuarios. Fallaron: {fail_count}.")
+    context.user_data["state"] = None
+
+async def admin_cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+    if context.user_data.get("state") == "waiting_for_broadcast_message":
+        await update.message.reply_text("❌ Difusión cancelada.")
+        context.user_data["state"] = None
+    else:
+        await update.message.reply_text("No hay ninguna difusión activa para cancelar.")
+
+# --- Estadísticas de Administración ---
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id): return
+
+    total_users = len(set(user_premium.keys()).union(set(int(uid) for uid in user_daily_views.keys())).union(known_chats))
+    premium_users = sum(1 for uid in user_premium if user_premium[uid]["expire_at"] > datetime.now(timezone.utc))
+    free_users = total_users - premium_users
+    total_movies = len(content_packages)
+    total_series = len(series_data)
+    
+    total_chapters = 0
+    for serie in series_data.values():
+        for temporada in serie.get("temporadas", {}).values():
+            total_chapters += len(temporada)
+
+    stats_text = (
+        f"📊 *Estadísticas del Bot:*\n"
+        f"• Usuarios Totales: {total_users}\n"
+        f"• Usuarios Premium: {premium_users}\n"
+        f"• Usuarios Gratuitos: {free_users}\n"
+        f"• Películas Publicadas: {total_movies}\n"
+        f"• Series Publicadas: {total_series}\n"
+        f"• Capítulos de Series: {total_chapters}\n"
+    )
+    await update.message.reply_text(stats_text, parse_mode="Markdown")
+
+
+# --- Manejo de mensajes de texto genéricos (para agregar el chat a known_chats) ---
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     if chat_id not in known_chats:
         known_chats.add(chat_id)
-        save_data()
-        await update.message.reply_text(f"✅ Este chat (`{chat_id}`) ha sido añadido a la lista de difusión.", parse_mode="Markdown")
+        save_data() # Guardar los chats conocidos cuando un nuevo usuario envía un mensaje
+
+    # Si el estado es para recibir sinopsis de película (admin)
+    if context.user_data.get("state") == "waiting_for_movie_caption":
+        await admin_receive_movie_caption(update, context)
+    # Si el estado es para recibir título de serie (admin)
+    elif context.user_data.get("state") == "waiting_for_serie_title":
+        await admin_receive_serie_title(update, context)
+    # Si el estado es para recibir sinopsis de serie (admin)
+    elif context.user_data.get("state") == "waiting_for_serie_caption":
+        await admin_receive_serie_caption(update, context)
+    # Si el estado es para recibir número de temporada (admin)
+    elif context.user_data.get("state") == "waiting_for_temporada_number":
+        await admin_receive_temporada_number(update, context)
+    # Si el estado es para recibir mensaje de difusión (admin)
+    elif context.user_data.get("state") == "waiting_for_broadcast_message":
+        await admin_receive_broadcast_message(update, context)
+    # Para cualquier otro mensaje de texto, si el usuario no está verificado,
+    # y no está en un flujo admin específico, no hacer nada o enviar un mensaje por defecto.
+    elif not user_verified.get(update.effective_user.id):
+        # Si el usuario no está verificado y no está en un flujo admin,
+        # su mensaje de texto podría ser el intento de "verificar"
+        # o simplemente enviar algo. Podríamos repetir el mensaje de verificación.
+        pass # La función start() ya maneja esto al inicio.
+
+# --- Manejo de fotos genéricas (para añadir contenido) ---
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Si el estado es para recibir foto de película (admin)
+    if context.user_data.get("state") == "waiting_for_movie_photo":
+        await admin_receive_movie_photo(update, context)
+    # Si el estado es para recibir foto de serie (admin)
+    elif context.user_data.get("state") == "waiting_for_serie_photo":
+        await admin_receive_serie_photo(update, context)
     else:
-        await update.message.reply_text(f"Este chat (`{chat_id}`) ya estaba en la lista de difusión.", parse_mode="Markdown")
+        # Aquí puedes poner un mensaje para fotos que no corresponden a un flujo
+        pass
 
-async def remove_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Elimina el chat actual de la lista de difusión."""
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("🚫 No tienes permiso para usar este comando.")
-        return
-    chat_id = str(update.effective_chat.id)
-    if chat_id in known_chats:
-        known_chats.remove(chat_id)
-        save_data()
-        await update.message.reply_text(f"❌ Este chat (`{chat_id}`) ha sido eliminado de la lista de difusión.", parse_mode="Markdown")
+# --- Manejo de videos genéricos (para añadir contenido) ---
+async def handle_video_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Si el estado es para recibir video de película (admin)
+    if context.user_data.get("state") == "waiting_for_movie_video":
+        await admin_receive_movie_video(update, context)
+    # Si el estado es para recibir video de capítulo de serie (admin)
+    elif context.user_data.get("state") == "waiting_for_capitulo_video":
+        await admin_receive_capitulo_video(update, context)
     else:
-        await update.message.reply_text(f"Este chat (`{chat_id}`) no estaba en la lista de difusión.", parse_mode="Markdown")
+        # Aquí puedes poner un mensaje para videos que no corresponden a un flujo
+        pass
 
-async def list_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lista todos los chats en la lista de difusión."""
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("🚫 No tienes permiso para usar este comando.")
-        return
-    if known_chats:
-        chat_list = "\n".join([f"`{chat_id}`" for chat_id in known_chats])
-        await update.message.reply_text(f"Chats en la lista de difusión:\n{chat_list}", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("No hay chats en la lista de difusión.")
 
-# --- Funciones de Inicio y Apagado del Bot ---
-async def on_startup(application: Application):
-    """Se ejecuta cuando la aplicación del bot se inicia."""
-    logger.info("Cargando datos al iniciar el bot...")
-    load_data()
-    logger.info("Datos cargados.")
+# --- Función para iniciar el servidor web para Render ---
+async def health_check(request):
+    return web.Response(text="Bot is running")
 
-async def on_shutdown(application: Application):
-    """Se ejecuta cuando la aplicación del bot se apaga."""
-    logger.info("Guardando datos al apagar el bot...")
-    save_data()
-    logger.info("Datos guardados.")
+async def webhook_handler(request):
+    update = Update.de_json(await request.json(), application.bot)
+    await application.process_update(update)
+    return web.Response(text="ok")
 
-# --- Función Principal del Bot ---
+# --- Función Principal (main) ---
 def main():
-    """Configura y ejecuta el bot."""
-    # Construir la aplicación del bot, pasando las funciones de inicio y apagado
-    application = Application.builder().token(TOKEN).post_init(on_startup).post_shutdown(on_shutdown).build()
+    load_data() # Cargar todos los datos al inicio
 
-    # --- Handlers Públicos (accesibles por cualquier usuario) ---
+    application = Application.builder().token(TOKEN).build()
+
+    # --- Handlers de Comandos ---
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(CommandHandler("admin", admin_menu, filters=filters.User(ADMIN_IDS)))
+    application.add_handler(CommandHandler("finalizar_serie", admin_finalizar_serie, filters=filters.User(ADMIN_IDS)))
+    application.add_handler(CommandHandler("siguiente_temporada", admin_next_temporada, filters=filters.User(ADMIN_IDS)))
+    application.add_handler(CommandHandler("cancelar_difusion", admin_cancel_broadcast, filters=filters.User(ADMIN_IDS)))
+
+
+    # --- Handlers de Callbacks ---
+    application.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+    application.add_handler(CallbackQueryHandler(handle_callback)) # Maneja todos los demás callbacks
+
+    # --- Handlers de Mensajes para Admin ---
+    application.add_handler(MessageHandler(filters.PHOTO & filters.User(ADMIN_IDS), handle_photo_message))
+    application.add_handler(MessageHandler(filters.VIDEO & filters.User(ADMIN_IDS), handle_video_message))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.User(ADMIN_IDS) & (
+            filters.COMMAND | # Capturar comandos como /finalizar_serie
+            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_movie_caption")) |
+            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_serie_title")) |
+            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_serie_caption")) |
+            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_temporada_number")) |
+            (filters.User(user_id=lambda uid: application.user_data.get(uid, {}).get("state") == "waiting_for_broadcast_message"))
+        ),
+        handle_text_message,
+    ))
+
+    # --- Handlers de Pagos ---
     application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
 
-    # --- Handlers para Contenido (solo para administradores y en chats privados) ---
-    # Usamos filters.ChatType.PRIVATE para asegurar que estos comandos solo funcionen en chats 1 a 1 con el bot
-    application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
-    application.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
+    # --- Handlers de Callbacks de Admin ---
+    application.add_handler(CallbackQueryHandler(admin_add_movie_start, pattern="^admin_add_movie$"))
+    application.add_handler(CallbackQueryHandler(admin_add_serie_start, pattern="^admin_add_serie$"))
+    application.add_handler(CallbackQueryHandler(admin_delete_content_start, pattern="^admin_delete_content$"))
+    application.add_handler(CallbackQueryHandler(admin_delete_content_confirm, pattern="^delete_pkg_|^delete_serie_"))
+    application.add_handler(CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$"))
+    application.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
 
-    # --- Handlers para Creación de Series (solo para administradores) ---
-    application.add_handler(CommandHandler("crear_serie", crear_serie))
-    application.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
-    application.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
-    application.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
+    # --- Handler para mensajes de texto genéricos (de usuarios normales y admins en estados no específicos) ---
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-    # --- Comandos de Administración de Chats (solo accesibles por los ADMIN_USER_IDS) ---
-    application.add_handler(CommandHandler("add_chat", add_chat, filters=filters.User(user_id=ADMIN_USER_IDS)))
-    application.add_handler(CommandHandler("remove_chat", remove_chat, filters=filters.User(user_id=ADMIN_USER_IDS)))
-    application.add_handler(CommandHandler("list_chats", list_chats, filters=filters.User(user_id=ADMIN_USER_IDS)))
+    # --- Iniciar el bot en modo webhook para Render ---
+    loop = asyncio.get_event_loop()
+    
+    # Crear una instancia de aiohttp.web.Application
+    app = web.Application()
+    app.router.add_post(f'/{TOKEN}', webhook_handler)
+    app.router.add_get('/health', health_check) # Para el health check de Render
 
-    # --- Comandos para forzar carga/guardado de datos (útil para depuración de administradores) ---
-    # Estas lambdas permiten aplicar el filtro de admin directamente
-    application.add_handler(CommandHandler("load_data", lambda u, c: asyncio.create_task(on_startup(application)) if is_admin(u.effective_user.id) else None))
-    application.add_handler(CommandHandler("save_data", lambda u, c: asyncio.create_task(on_shutdown(application)) if is_admin(u.effective_user.id) else None))
+    # Configurar el webhook de Telegram
+    webhook_url = f"{APP_URL}/{TOKEN}"
+    print(f"🌐 Configurando webhook en: {webhook_url}")
+    loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
 
-    # --- Configurar Webhook para el Despliegue en Render ---
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path="/webhook", # Ruta donde Telegram enviará las actualizaciones
-        webhook_url=APP_URL + "/webhook", # URL completa del webhook
-        # on_startup y on_shutdown ya NO van aquí, se pasaron al constructor de Application
-    )
+    # Iniciar el servidor aiohttp
+    runner = web.AppRunner(app)
+    loop.run_until_complete(runner.setup())
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    print(f"🚀 Servidor web escuchando en el puerto {PORT}")
+    loop.run_until_complete(site.start())
+
+    # Mantener el bucle de eventos ejecutándose
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.run_until_complete(runner.cleanup())
+        loop.close()
 
 if __name__ == "__main__":
     main()
