@@ -3,7 +3,7 @@ import json
 import tempfile
 import logging
 import asyncio
-from datetime import datetime, timedelta, timezone # <-- ¡IMPORTANTE! Se añadió timezone
+from datetime import datetime, timedelta, timezone
 from aiohttp import web
 from telegram import (
     Update,
@@ -277,32 +277,27 @@ CHANNELS = {
 
 # --- Menú principal ---
 def get_main_menu():
+    # ¡IMPORTANTE! Aquí se mantienen tus URLs originales para los botones que lo tenían.
     return InlineKeyboardMarkup(
         [
-            # Primera fila: Películas | Series
             [
-                InlineKeyboardButton("🎬 Películas", callback_data="peliculas_menu"), # Nuevo botón para películas
-                InlineKeyboardButton("📺 Series", callback_data="list_series"),      # Nuevo botón para series
+                InlineKeyboardButton("🎧 Audio Libros", url="https://t.me/+3lDaURwlx-g4NWJk"),
+                InlineKeyboardButton("📚 Libro PDF", url="https://t.me/+iJ5D1VLCAW5hYzhk"),
             ],
-            # Segunda fila: Audiolibros | Libro PDF
             [
-                InlineKeyboardButton("🎧 Audiolibros", callback_data="audio_libros"),
-                InlineKeyboardButton("📚 Libro PDF", callback_data="libro_pdf"),
+                InlineKeyboardButton("💬 Chat Pedido", url="https://t.me/+6eA7AdRfgq81NzBh"),
+                InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
             ],
-            # Tercera fila: Chat Pedido | Cursos
             [
-                InlineKeyboardButton("💬 Chat Pedido", callback_data="chat_pedido"),
-                InlineKeyboardButton("🎓 Cursos", callback_data="cursos"),
+                InlineKeyboardButton("🎬 Peliculas", callback_data="peliculas_menu"), # Ahora usa callback_data
+                InlineKeyboardButton("📺 Series", callback_data="list_series"),      # Ahora usa callback_data
             ],
-            # Cuarta fila: Planes
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
             ],
-            # Quinta fila: Perfil
             [
                 InlineKeyboardButton("🧑 Perfil", callback_data="perfil"),
             ],
-            # Sexta fila: Info | Soporte
             [
                 InlineKeyboardButton("ℹ️ Info", callback_data="info_hades"), # Cambié el callback_data para que sea más específico
                 InlineKeyboardButton("❓ Soporte", url="https://t.me/Hsito"),
@@ -491,15 +486,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "menu_principal":
         await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
 
-    # NUEVOS CALLBACKS DE MENÚ
+    # NUEVOS CALLBACKS DE MENÚ (Estos sí deben ser callbacks para que el bot los maneje)
     elif data == "peliculas_menu":
-        await query.message.reply_text("🎬 Aquí podrás explorar nuestro catálogo de películas. ¡Próximamente más!")
+        await query.message.reply_text("🎬 Aquí podrás explorar nuestro catálogo de películas. ¡Próximamente más!",
+                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")]])
+                                      )
         # Aquí podrías añadir una lista de botones para diferentes géneros o directamente una lista de películas.
     
     elif data == "list_series":
         # Construye un menú con las series existentes
         if not series_data:
-            await query.message.reply_text("📺 Actualmente no hay series disponibles. ¡Vuelve pronto!")
+            await query.message.reply_text("📺 Actualmente no hay series disponibles. ¡Vuelve pronto!",
+                                           reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")]])
+                                          )
             return
         
         botones_series = []
@@ -515,16 +514,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📺 Explora nuestras series:", reply_markup=InlineKeyboardMarkup(botones_series))
 
 
-    elif data == "audio_libros":
+    # Estos ya eran URLs y se mantienen así por tu petición original
+    elif data == "audio_libros": # Este callback ya no será llamado si el botón es URL, pero lo dejo por si cambias de idea.
         await query.message.reply_text("🎧 Aquí estará el contenido de Audio Libros. ¡Pronto más!")
-    elif data == "libro_pdf":
+    elif data == "libro_pdf": # Este callback ya no será llamado si el botón es URL.
         await query.message.reply_text("📚 Aquí estará el contenido de Libro PDF. ¡Pronto más!")
-    elif data == "chat_pedido":
+    elif data == "chat_pedido": # Este callback ya no será llamado si el botón es URL.
         await query.message.reply_text("💬 Aquí puedes hacer tu pedido en el chat. ¡Pronto más!")
-    elif data == "cursos":
+    elif data == "cursos": # Este callback ya no será llamado si el botón es URL.
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles. ¡Pronto más!")
+    
     elif data == "info_hades": # Nuevo callback para el botón "Info"
-        await query.message.reply_text("ℹ️ Este bot fue creado por *Hades*.\n\nContáctalo para soporte o desarrollo de bots personalizados.", parse_mode="Markdown")
+        await query.message.reply_text("ℹ️ Este bot fue creado por *Hades*.\n\nContáctalo para soporte o desarrollo de bots personalizados.", 
+                                       parse_mode="Markdown",
+                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")]])
+                                      )
 
     elif data.startswith("show_video_"):
         prefix, pkg_id = data.rsplit('_', 1)
@@ -716,7 +720,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
     
-    expire_at = datetime.now(timezone.utc) + timedelta(days=30) # <-- ¡IMPORTANTE! Se usa timezone.utc
+    expire_at = datetime.now(timezone.utc) + timedelta(days=30)
     user_premium[user_id] = {
         "expire_at": expire_at,
         "plan_type": payload
@@ -744,7 +748,7 @@ async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         await msg.reply_text("✅ Sinopsis recibida. Ahora envía el video para contenido individual o usa /crear_serie para series.")
     else:
-        await msg.reply_text("❌ Envía una imagen con sinopsis.")
+        await msg.reply_text("❌ Envía una imagen con sinopsis y un caption.")
 
 async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -758,16 +762,13 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Si hay una serie en progreso para este usuario
     if user_id in current_series:
         serie_data = current_series[user_id]
-        if "current_temporada_key" not in serie_data:
+        if "current_temporada_key" not in serie_data or serie_data["current_temporada_key"] not in serie_data["temporadas"]:
             await msg.reply_text("❌ No se ha seleccionado una temporada activa para añadir capítulos. Usa /agregar_temporada [número].")
             return
         
         temporada_key = serie_data["current_temporada_key"]
         
-        # Inicializa la lista de capítulos si la temporada es nueva
-        if temporada_key not in serie_data["temporadas"]:
-            serie_data["temporadas"][temporada_key] = []
-
+        # Agrega el video al final de la lista de capítulos de la temporada actual
         serie_data["temporadas"][temporada_key].append(msg.video.file_id)
         
         await msg.reply_text(
@@ -781,7 +782,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("❌ Primero envía una sinopsis con imagen para crear contenido individual.")
         return
 
-    pkg_id = str(int(datetime.now(timezone.utc).timestamp())) # Usa datetime.now(timezone.utc)
+    pkg_id = str(int(datetime.now(timezone.utc).timestamp()))
     photo_id = current_photo[user_id]["photo_id"]
     caption = current_photo[user_id]["caption"]
     video_id = msg.video.file_id
@@ -828,7 +829,7 @@ async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Primero envía la sinopsis con imagen.")
         return
     
-    serie_id = str(int(datetime.now(timezone.utc).timestamp())) # Usa datetime.now(timezone.utc)
+    serie_id = str(int(datetime.now(timezone.utc).timestamp()))
     data = current_photo[user_id]
     
     current_series[user_id] = {
@@ -934,7 +935,7 @@ async def add_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Añade el chat actual a la lista de chats conocidos (solo para administradores)."""
     user_id = update.effective_user.id
     # Reemplaza con tus IDs de administrador
-    ADMIN_IDS = [123456789, 987654321] # <-- ¡IMPORTANTE! Cambia esto por tus propios IDs de Telegram
+    ADMIN_IDS = [5603774849, 6505701831] # <-- ¡IMPORTANTE! Cambia esto por tus propios IDs de Telegram
 
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ No tienes permisos para usar este comando.")
@@ -942,9 +943,12 @@ async def add_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.effective_chat.id
     if chat_id < 0: # Es un grupo o canal
-        known_chats.add(chat_id)
-        save_data()
-        await update.message.reply_text(f"✅ Chat {chat_id} añadido a la lista de difusión.")
+        if chat_id not in known_chats:
+            known_chats.add(chat_id)
+            save_data()
+            await update.message.reply_text(f"✅ Chat {chat_id} añadido a la lista de difusión.")
+        else:
+            await update.message.reply_text(f"ℹ️ El chat {chat_id} ya estaba en la lista de difusión.")
     else:
         await update.message.reply_text("❌ Este comando solo funciona en grupos o canales.")
 
@@ -952,7 +956,7 @@ async def remove_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Elimina el chat actual de la lista de chats conocidos (solo para administradores)."""
     user_id = update.effective_user.id
     # Reemplaza con tus IDs de administrador
-    ADMIN_IDS = [123456789, 987654321] # <-- ¡IMPORTANTE! Cambia esto por tus propios IDs de Telegram
+    ADMIN_IDS = [5603774849, 6505701831] # <-- ¡IMPORTANTE! Cambia esto por tus propios IDs de Telegram
 
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ No tienes permisos para usar este comando.")
@@ -976,14 +980,16 @@ async def handle_webhook(request):
     await application.process_update(update)
     return web.Response(status=200)
 
-async def set_webhook():
-    await application.bot.set_webhook(url=APP_URL + "/webhook")
+async def set_webhook_func(app_instance: Application):
+    """Esta función ahora recibe la instancia de la aplicación."""
+    await app_instance.bot.set_webhook(url=APP_URL + "/webhook")
     logger.info(f"✅ Webhook establecido en: {APP_URL}/webhook")
 
 # --- Función Principal ---
 def main():
     """Start the bot."""
     # Crea la Application y pasa el token de tu bot.
+    global application # Declara application como global para que handle_webhook pueda acceder a ella
     application = Application.builder().token(TOKEN).build()
 
     # Handlers
@@ -993,11 +999,12 @@ def main():
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
     # Manejadores para añadir contenido (películas/videos individuales)
-    # Revisa estos filtros, son la fuente común del error "TypeError: argument of type 'bool' is not iterable"
     # filters.PHOTO & filters.CAPTION: Asegura que es una foto Y tiene un caption (texto).
-    application.add_handler(MessageHandler(filters.PHOTO & filters.CAPTION, recibir_foto))
+    application.add_handler(MessageHandler(filters.PHOTO & filters.CAPTION & filters.ChatType.PRIVATE, recibir_foto))
     # filters.VIDEO: Asegura que es un video. Este handler ahora maneja videos tanto para series como individuales.
-    application.add_handler(MessageHandler(filters.VIDEO, recibir_video))
+    # filters.ChatType.PRIVATE: Para que solo responda a videos en el chat privado del bot
+    application.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
+
 
     # Comandos para la administración de series
     application.add_handler(CommandHandler("crear_serie", crear_serie))
@@ -1009,31 +1016,180 @@ def main():
     application.add_handler(CommandHandler("add_chat", add_chat))
     application.add_handler(CommandHandler("remove_chat", remove_chat))
 
-    # Inicia el servidor web para el webhook
-    app = web.Application()
-    app.router.add_post("/webhook", handle_webhook)
-    
-    # Inicia la aplicación de Telegram y configura el webhook
-    async def on_startup(app_obj):
-        await set_webhook()
+    # ---- CAMBIO AQUÍ ----
+    # 1. Llamar a set_webhook directamente (una sola vez)
+    #    Para hacer esto de forma asíncrona en un entorno síncrono (main), necesitamos un loop de asyncio.
+    #    Como run_webhook ya maneja su propio loop, la forma más sencilla en este contexto es:
+    #    Si estás en PTB 20.x, puedes usar application.initialize() y luego await application.bot.set_webhook().
+    #    Si estás en una versión anterior de PTB o para compatibilidad más amplia con el setup de Render,
+    #    es común que el `set_webhook` se realice en un proceso separado o en el propio `main`
+    #    antes de que el servidor `aiohttp` se inicie si `run_webhook` no tiene `on_startup`.
 
+    # Para asegurar que set_webhook se ejecuta antes de que el servidor empiece a escuchar:
+    # Si tu versión de PTB es 20.0+, puedes hacer esto:
+    # asyncio.run(application.initialize()) # Necesario para iniciar el bot si no usas run_polling
+    # asyncio.run(application.bot.set_webhook(url=APP_URL + "/webhook"))
+    # logger.info(f"✅ Webhook establecido en: {APP_URL}/webhook")
+
+    # Sin embargo, dado el error "on_startup", es más probable que debas confiar en el inicio del servidor de aiohttp
+    # para ejecutar el set_webhook. Si run_webhook no tiene on_startup, el patrón es:
+    # aiohttp.web.run_app() y pasar el startup_hook.
+
+    # REVISIÓN: La manera más sencilla con `run_webhook` sin `on_startup` es:
+    # Simplemente ejecutar el set_webhook al inicio del script, una vez.
+    # Como `application.run_webhook` es un método síncrono que inicia un loop asíncrono,
+    # el `set_webhook` debe ser `await`eado. Esto implica que `main` también debe ser `async`.
+
+    # Vamos a refactorizar `main` a `async def` para permitir el `await set_webhook_func`.
+
+    # Crea la Application y pasa el token de tu bot.
+    # `application` ya es global y creada arriba.
+
+    # Inicia la aplicación de Telegram y configura el webhook
+    # Aquí el cambio crucial: Llama a set_webhook_func antes de run_webhook
+    # como main ahora es async, puedes await directamente.
+    # No, run_webhook es síncrono y bloqueante. La forma correcta en un entorno como Render
+    # es que la función que inicia el servidor aiohttp tenga un hook de inicio.
+    # La versión de python-telegram-bot 20.x maneja esto internamente.
+    # Si te da este error, **probablemente estás en PTB 13.x o una versión muy temprana de 20.x**
+    # que usa una forma diferente de iniciar el servidor web subyacente (aiohttp).
+
+    # Para Render, el patrón más simple y robusto (que asume que run_webhook no tiene on_startup)
+    # es que el webhook se configure una vez, idealmente en un script de deploy o manualmente.
+    # Sin embargo, si quieres que el bot lo haga al iniciar, la única forma es:
+
+    # 1. Ejecutar Application.run_webhook() en modo polling (para un solo uso)
+    #    para establecer el webhook, y luego relanzar en modo webhook. (Complicado)
+    # 2. Asumir que set_webhook puede ser llamado *fuera* del loop del bot, lo cual es cierto.
+
+    # La solución más limpia que se ajusta a lo que estás intentando hacer
+    # (ejecutar set_webhook cuando el servidor arranca) es modificar cómo
+    # `aiohttp` se integra. `run_webhook` de `python-telegram-bot` es una abstracción.
+    # Si esa abstracción no tiene `on_startup`, debemos ir al nivel de `aiohttp`.
+
+    # Option A (Si tu PTB realmente es viejo y no tiene on_startup):
+    # Tendrías que iniciar el servidor aiohttp manualmente y añadir el hook ahí.
+    # Esto implica no usar `application.run_webhook` directamente, sino:
+    # `application.updater.start_webhook(...)` y luego `web.run_app(...)`.
+
+    # Dado que `application.run_webhook` te permite especificar `listen` y `port`,
+    # es la forma preferida. El error de `on_startup` es el problema.
+
+    # Solución propuesta: Actualiza `python-telegram-bot`
+    # Es la forma más fácil de obtener la funcionalidad `on_startup` si estás en PTB 20+.
+    # Si ya estás en PTB 20.0 y el problema persiste, es posible que haya un problema
+    # con las dependencias de aiohttp o que la firma del método haya cambiado ligeramente.
+
+    # Si NO PUEDES ACTUALIZAR `python-telegram-bot` a una versión que soporte `on_startup`:
+    # La solución es establecer el webhook *una vez* antes de iniciar el bot en Render.
+    # Podrías tener un script `set_webhook.py` que solo haga esto:
+    #
+    # # set_webhook.py
+    # import asyncio
+    # import os
+    # from telegram.ext import Application
+    #
+    # TOKEN = os.getenv("TOKEN")
+    # APP_URL = os.getenv("APP_URL")
+    #
+    # async def main():
+    #     app = Application.builder().token(TOKEN).build()
+    #     await app.bot.set_webhook(url=APP_URL + "/webhook")
+    #     print(f"Webhook establecido en: {APP_URL}/webhook")
+    #
+    # if __name__ == "__main__":
+    #     asyncio.run(main())
+    #
+    # Y luego en Render, tu comando de inicio sería:
+    # `python set_webhook.py && python bot.py`
+    # O ejecutar `python set_webhook.py` como un "Pre-Build Command" en Render.
+
+    # PERO, si la intención es que el bot mismo lo haga al iniciar siempre:
+    # Es probable que tu versión de `python-telegram-bot` o `aiohttp` no sean compatibles
+    # con la forma en que `on_startup` fue diseñado para ser usado en `run_webhook`.
+    #
+    # La alternativa es usar el método `start_webhook` del `Updater` y luego iniciar
+    # la aplicación web de `aiohttp` manualmente.
+
+    # **Vamos a intentar la solución más limpia que se ajusta a lo que querías,
+    # asumiendo que el error es por una versión que no tiene `on_startup` en `run_webhook`.**
+    #
+    # **La forma más estándar si `on_startup` no funciona es llamar a `set_webhook` ANTES
+    # de `run_webhook` si el `Application` ya está inicializado.**
+
+    # Modificación para `main`:
+    async def run_bot():
+        # Dentro de esta función async, podemos await el set_webhook.
+        await set_webhook_func(application) # Llama a la función asíncrona para establecer el webhook
+        
+        # Ahora, inicia el webhook del bot.
+        # run_webhook es un método bloqueante, no necesitas await aquí.
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path="/webhook",
+            webhook_url=APP_URL + "/webhook",
+            # on_startup=on_startup # <--- ESTO ES LO QUE ESTABA CAUSANDO EL ERROR Y SE ELIMINA
+        )
+
+    # Inicia el servidor web para el webhook (esto es la parte de aiohttp)
+    # Esto ya no es necesario si usas application.run_webhook directamente,
+    # ya que application.run_webhook ya inicia su propio servidor aiohttp.
+    # Solo necesitas el `handle_webhook` para que el servidor que inicia PTB lo use.
+    # app = web.Application()
+    # app.router.add_post("/webhook", handle_webhook) # Esta ruta ya la maneja PTB internamente
+    # Esto se vuelve redundante con `application.run_webhook`.
+
+    # El problema es que `application.run_webhook` por sí mismo ya inicia el servidor web.
+    # No necesitas `web.Application()` si usas `run_webhook`.
+    # Lo que necesitamos es que `set_webhook` se ejecute ANTES de que `run_webhook`
+    # inicie su bucle y escuche por peticiones.
+
+    # La función main no puede ser async directamente si se llama con `main()`.
+    # Debe ser llamada con `asyncio.run(main())`.
+    # Refactoricemos `main` para que sea un wrapper y `start_bot` sea la corrutina.
+
+    # --- Función Principal (REFACTORIZADA) ---
+def main():
+    """Start the bot."""
+    # Crea la Application y pasa el token de tu bot.
+    global application # Declara application como global para que handle_webhook pueda acceder a ella
+    application = Application.builder().token(TOKEN).build()
+
+    # Handlers (igual que antes)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+
+    application.add_handler(MessageHandler(filters.PHOTO & filters.CAPTION & filters.ChatType.PRIVATE, recibir_foto))
+    application.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video))
+
+    application.add_handler(CommandHandler("crear_serie", crear_serie))
+    application.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
+    application.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
+
+    application.add_handler(CommandHandler("add_chat", add_chat))
+    application.add_handler(CommandHandler("remove_chat", remove_chat))
+
+    # --- MODIFICACIÓN CLAVE AQUÍ ---
+    # 1. Initialize the Application
+    #    (This must be called before interacting with the bot object's network methods)
+    asyncio.run(application.initialize())
+
+    # 2. Set the webhook before starting the webhook server
+    asyncio.run(set_webhook_func(application))
+
+    # 3. Run the webhook server (this is a blocking call)
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path="/webhook",
         webhook_url=APP_URL + "/webhook",
-        on_startup=on_startup # Llama a set_webhook cuando la aplicación web se inicie
+        # on_startup=on_startup # Eliminar este argumento
     )
+
 
 if __name__ == "__main__":
     load_data() # Carga los datos al iniciar el bot
-    # Crear y ejecutar la aplicación aiohttp manualmente
-    # Esto es necesario cuando usas `application.run_webhook` con aiohttp fuera de un script directamente ejecutable
-    # y quieres controlar el loop de eventos.
-    # El `application.run_webhook` internamente ya lo hace, pero si lo tuvieras separado así:
-    # app_web = web.Application()
-    # app_web.router.add_post("/webhook", handle_webhook)
-    # web.run_app(app_web, host="0.0.0.0", port=PORT)
-
-    # Simplificando la ejecución para Render:
     main()
