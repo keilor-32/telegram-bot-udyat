@@ -2,7 +2,7 @@ import os
 import json
 import tempfile
 import logging
-import asyncio
+import asyncio # Asegúrate de que asyncio esté importado
 from datetime import datetime, timedelta, timezone
 from aiohttp import web # aiohttp se importa para el servidor web si se usa con run_webhook
 from telegram import (
@@ -10,7 +10,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LabeledPrice,
-    InputMediaVideo, # No se usa directamente en este código, pero puede ser útil para medios
+    InputMediaVideo,
 )
 from telegram.ext import (
     Application,
@@ -25,6 +25,10 @@ from telegram.ext import (
 import firebase_admin
 from firebase_admin import credentials, firestore
 import re
+
+# ... (El resto de tus imports, configuración de logging, variables de entorno,
+# inicialización de Firebase, definiciones de planes, etc. van aquí. NO CAMBIES ESO)
+# ...
 
 # --- Inicializar Firestore con variable de entorno JSON doblemente serializada ---
 # Esto asegura que el JSON se cargue correctamente incluso si está escapado.
@@ -1278,8 +1282,14 @@ async def handle_webhook(request):
     await application.process_update(update)
     return web.Response(status=200) # Telegram espera un 200 OK para saber que la actualización fue recibida
 
-async def set_webhook_func(app_instance: Application):
-    """Establece el webhook del bot de Telegram a la URL de la aplicación."""
+# --- Función de inicio para el webhook ---
+async def startup_tasks(app_instance: Application):
+    """
+    Tareas que se ejecutan una vez al inicio, dentro del bucle de eventos gestionado por run_webhook.
+    """
+    await app_instance.initialize()
+    logger.info("Aplicación de Telegram Bot inicializada.")
+
     webhook_url = APP_URL + "/webhook"
     current_webhook_info = await app_instance.bot.get_webhook_info()
     if current_webhook_info.url != webhook_url:
@@ -1287,7 +1297,6 @@ async def set_webhook_func(app_instance: Application):
         logger.info(f"✅ Webhook establecido en: {webhook_url}")
     else:
         logger.info(f"✅ Webhook ya configurado correctamente en: {webhook_url}")
-
 
 # --- Función Principal ---
 def main():
@@ -1321,22 +1330,14 @@ def main():
     application.add_handler(CommandHandler("admin_delete_videos", delete_all_videos_firestore_command)) # Nuevo comando admin
 
     # --- INICIALIZACIÓN Y CONFIGURACIÓN DEL WEBHOOK ---
-    # `application.initialize()` prepara el bot para operaciones de red.
-    asyncio.run(application.initialize()) 
-    logger.info("Aplicación de Telegram Bot inicializada.")
-
-    # Establece el webhook en Telegram. Esto solo necesita hacerse una vez.
-    asyncio.run(set_webhook_func(application))
-
     # Inicia el servidor webhook. Este es un método bloqueante que correrá indefinidamente.
     logger.info(f"Iniciando servidor webhook en http://0.0.0.0:{PORT}/webhook")
     application.run_webhook(
         listen="0.0.0.0", # Escucha en todas las interfaces de red
         port=PORT,         # Puerto de escucha, tomado de las variables de entorno
         url_path="/webhook", # Ruta URL que Telegram usará para enviar actualizaciones
-        # Ya no se necesita 'on_startup' porque set_webhook_func ya se llamó
-        # También, 'webhook_url' aquí es opcional si ya se estableció con set_webhook.
-        # Lo mantengo para claridad, pero el que importa es el de set_webhook_func.
+        # Llama a startup_tasks para que se ejecute una vez al inicio del bucle de eventos
+        on_startup=startup_tasks,
         webhook_url=APP_URL + "/webhook", 
     )
 
