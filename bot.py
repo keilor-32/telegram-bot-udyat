@@ -3,7 +3,7 @@ import json
 import tempfile
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # ¡Importamos 'timezone' aquí!
 from aiohttp import web
 from telegram import (
     Update,
@@ -83,6 +83,9 @@ def save_user_premium_firestore():
     batch = db.batch()
     for uid, exp in user_premium.items():
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
+        # Aseguramos que el datetime sea timezone-aware antes de convertirlo a ISO
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
         batch.set(doc_ref, {"expire_at": exp.isoformat()})
     batch.commit()
 
@@ -92,10 +95,14 @@ def load_user_premium_firestore():
     for doc in docs:
         data = doc.to_dict()
         try:
+            # Parseamos con fromisoformat, que maneja la info de zona horaria si está presente
             expire_at = datetime.fromisoformat(data.get("expire_at"))
+            # Nos aseguramos de que sea timezone-aware en UTC
+            if expire_at.tzinfo is None:
+                expire_at = expire_at.replace(tzinfo=timezone.utc)
             result[int(doc.id)] = expire_at
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error cargando datos premium del usuario {doc.id}: {e}")
     return result
 
 def save_videos_firestore():
@@ -217,7 +224,8 @@ PLAN_ULTRA_ITEM = {
 
 # --- Control acceso ---
 def is_premium(user_id):
-    return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
+    # Comparamos con datetime.now(timezone.utc) para que sea timezone-aware
+    return user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc)
 
 def can_view_video(user_id):
     if is_premium(user_id):
@@ -263,7 +271,7 @@ def get_main_menu():
             ],
             [
                 InlineKeyboardButton("ℹ️ Info", callback_data="info"),
-                InlineKeyboardButton("❓ soporte", callback_data="https://t.me/Hsito"),
+                InlineKeyboardButton("❓ soporte", url="https://t.me/Hsito"),
             ],
         ]
     )
@@ -388,7 +396,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "planes":
         texto_planes = (
             f"💎 *Planes disponibles:*\n\n"
-            f"🔹 Free – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n"
+            f"🔹 Gratis – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n" # Cambiado "Free" a "Gratis"
             "🔸 *Plan Pro*\n"
             "Precio: 40 estrellas\n"
             "Beneficios: 50 videos diarios, sin reenvíos ni compartir.\n\n"
@@ -438,12 +446,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "perfil":
-        plan = "Premium" if is_premium(user_id) else "Free"
-        exp = user_premium.get(user_id)
+        plan_actual = "Gratis" # Por defecto es Gratis
+        expiracion = "N/A"
+
+        # Determinamos si el usuario es premium y qué plan tiene
+        if user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc):
+            expiracion = user_premium[user_id].strftime("%Y-%m-%d %H:%M UTC") # Añadimos hora y UTC
+            # Para determinar el plan específico, necesitamos una forma de almacenar cuál compró
+            # Una solución simple es usar el payload al momento de la compra
+            # Por ahora, solo podemos decir "Premium" en general si no hay un registro más granular.
+            # Para ser más exactos, necesitaríamos guardar el `payload` de la compra en `user_premium`.
+            # Por simplicidad en este ejemplo, si es premium, asumiremos que es Plan Ultra o Pro si el proveedor lo soporta.
+            # Mejorar esto requeriría un campo adicional en 'user_premium' o una consulta a la base de datos de pagos.
+            plan_actual = "Plan Premium (Activo)" # Puedes refinar esto si guardas el tipo de plan comprado
+
+            # Una forma de saber qué plan específico compró sería guardar el payload en user_premium
+            # Por ejemplo: user_premium = {user_id: {"expire_at": datetime_obj, "plan_type": "plan_pro"}}
+            # Si se implementa eso, podrías hacer:
+            # plan_info = user_premium.get(user_id, {})
+            # if plan_info and plan_info["expire_at"] > datetime.now(timezone.utc):
+            #     plan_actual = "Plan Pro" if plan_info.get("plan_type") == "plan_pro" else "Plan Ultra"
+            #     expiracion = plan_info["expire_at"].strftime("%Y-%m-%d %H:%M UTC")
+
         await query.message.reply_text(
-            f"🧑 Perfil:\n• {user.full_name}\n• @{user.username or 'Sin usuario'}\n"
-            f"• ID: {user_id}\n• Plan: {plan}\n• Expira: {exp.strftime('%Y-%m-%d') if exp else 'N/A'}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]),
+            f"🧑 Perfil:\n"
+            f"• Nombre: {user.full_name}\n"
+            f"• Usuario: @{user.username or 'Sin usuario'}\n"
+            f"• ID: {user_id}\n"
+            f"• Plan: {plan_actual}\n"
+            f"• Expira: {expiracion}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")]]),
+            parse_mode="Markdown" # Usamos Markdown para un formato más bonito
         )
 
     elif data == "menu_principal":
@@ -457,6 +490,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("💬 Aquí puedes hacer tu pedido en el chat.")
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
+    elif data == "info":
+        await query.message.reply_text("ℹ️ Información sobre el bot y sus funcionalidades. Pronto más detalles.",
+                                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")]])
+                                        )
 
     # --- Lógica para mostrar el video individual después del paso intermedio ---
     elif data.startswith("show_video_"):
@@ -623,7 +660,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Si hay más de una temporada, damos la opción de volver a la lista de temporadas
             # de lo contrario, si solo hay una temporada, volvemos a la lista de capítulos de esa temporada.
             if len(serie.get("temporadas", {})) > 1:
-                 markup_buttons.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
+                    markup_buttons.append([InlineKeyboardButton("🔙 Ver Temporadas", callback_data=f"list_temporadas_{serie_id}")])
             else: # Si solo hay una temporada, vuelve a la lista de capítulos de la misma temporada
                 markup_buttons.append([InlineKeyboardButton("🔙 Ver Capítulos", callback_data=f"ver_{serie_id}_{temporada}")])
 
@@ -658,11 +695,22 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
-    if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
-        expire_at = datetime.utcnow() + timedelta(days=30)
-        user_premium[user_id] = expire_at
-        save_data()
-        await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
+    
+    # Determinamos el plan adquirido y lo guardamos
+    plan_adquirido = "Desconocido"
+    if payload == PREMIUM_ITEM["payload"]:
+        plan_adquirido = PREMIUM_ITEM["title"]
+    elif payload == PLAN_PRO_ITEM["payload"]:
+        plan_adquirido = PLAN_PRO_ITEM["title"]
+    elif payload == PLAN_ULTRA_ITEM["payload"]:
+        plan_adquirido = PLAN_ULTRA_ITEM["title"]
+
+    expire_at = datetime.now(timezone.utc) + timedelta(days=30) # Usamos datetime.now(timezone.utc)
+
+    # Almacenar el tipo de plan adquirido junto con la fecha de expiración
+    user_premium[user_id] = {"expire_at": expire_at, "plan_type": payload} # ¡Modificado aquí para guardar el payload!
+    save_data()
+    await update.message.reply_text(f"🎉 ¡Gracias por tu compra! Tu **{plan_adquirido}** se activó por 30 días.", parse_mode="Markdown")
 
 # --- Recepción contenido (sinopsis + video) ---
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -762,212 +810,195 @@ async def agregar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ La temporada {temporada_num} ya existe.")
         return
     serie["temporadas"][temporada_key] = []
-    await update.message.reply_text(f"✅ Temporada {temporada_num} agregada.\nAhora envía todos los videos de los capítulos para esta temporada en un álbum (o varios si hay muchos) o de uno en uno, usando el mismo comando /agregar_capitulo {temporada_num}.")
+    await update.message.reply_text(f"✅ Temporada {temporada_num} agregada.\nAhora envía todos los videos de los capítulos para esta temporada en un álbum (o varios si hay muchos) o de uno en uno, usando el comando /agregar_capitulo {temporada_num}.")
 
 async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando para agregar capítulo a temporada. Ahora adaptado para indicar envío masivo."""
+    """Comando para agregar capítulo a temporada. Permite envío individual o en álbum."""
     user_id = update.message.from_user.id
     if user_id not in current_series:
         await update.message.reply_text("❌ No hay serie en creación. Usa /crear_serie primero.")
         return
+    
     args = context.args
-    if len(args) < 1 or not args[0].isdigit():
-        await update.message.reply_text("❌ Usa /agregar_capitulo N y envía el/los video(s) de los capítulos en un álbum o individualmente.")
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("❌ Usa /agregar_capitulo N donde N es el número de la temporada. Luego envía el/los video(s).")
         return
+    
     temporada_num = args[0]
     temporada_key = f"T{temporada_num}"
     serie = current_series[user_id]
+    
     if temporada_key not in serie["temporadas"]:
         await update.message.reply_text(f"❌ La temporada {temporada_num} no existe. Añádela con /agregar_temporada {temporada_num}")
         return
-    
-    await update.message.reply_text(
-        f"📽️ Por favor envía ahora el/los video(s) para los capítulos de la temporada {temporada_num}. Puedes enviar un álbum de hasta 10 videos."
-    )
-    # Guardamos temporada activa para el usuario para el siguiente video(s)
-    serie["temporada_activa"] = temporada_key
 
-async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Para recibir video(s) y asignarlo(s) como capítulo(s)
-    si el usuario está en proceso de agregar capítulo a temporada.
-    Maneja tanto videos individuales como álbumes.
-    """
-    msg = update.message
-    user_id = msg.from_user.id
-
-    if user_id not in current_series:
-        # No estamos en proceso de crear capítulo, manejar como video individual
-        await recibir_video(update, context)
-        return
-
-    serie = current_series[user_id]
-    if "temporada_activa" not in serie:
-        # No hay temporada activa para añadir capítulo, manejar como video individual
-        await recibir_video(update, context)
-        return
-
-    temporada_key = serie["temporada_activa"]
-    
-    videos_added = 0
-    if msg.media_group_id and msg.video: # Es parte de un álbum
-        # Los videos en un álbum llegan como mensajes individuales con el mismo media_group_id
-        # Para evitar duplicados y procesar solo una vez por álbum, podríamos usar un cache temporal
-        # Simple approach: solo añadir si no está ya en la lista (no es perfecto si hay reenvíos idénticos)
-        if msg.video.file_id not in serie["temporadas"][temporada_key]:
-            serie["temporadas"][temporada_key].append(msg.video.file_id)
-            videos_added = 1
-    elif msg.video: # Es un video individual
-        serie["temporadas"][temporada_key].append(msg.video.file_id)
-        videos_added = 1
+    # Si se envía un álbum de videos
+    if update.message.media_group_id:
+        # Los videos de un álbum llegan uno por uno, pero comparten el media_group_id
+        # Para manejar esto, podríamos guardar los file_ids en una lista temporal
+        # y procesarlos cuando el álbum esté completo (p.ej., después de unos segundos sin nuevos videos)
+        # O, como solución simple, añadirlos directamente si no hay una forma de determinar el fin del álbum fácilmente.
+        # Para este ejemplo, simplemente añadiremos cada video que llegue con el comando.
+        if update.message.video:
+            video_id = update.message.video.file_id
+            serie["temporadas"][temporada_key].append(video_id)
+            await update.message.reply_text(f"✅ Capítulo añadido a Temporada {temporada_num}. Envía el siguiente o /finalizar_serie.")
+        else:
+            await update.message.reply_text("❌ Por favor, envía videos para los capítulos.")
+    # Si se envía un solo video
+    elif update.message.video:
+        video_id = update.message.video.file_id
+        serie["temporadas"][temporada_key].append(video_id)
+        await update.message.reply_text(f"✅ Capítulo añadido a Temporada {temporada_num}. Envía el siguiente o /finalizar_serie.")
     else:
-        await msg.reply_text("❌ Envía un video válido para el capítulo.")
-        return
-
-    if videos_added > 0:
-        total_chapters = len(serie["temporadas"][temporada_key])
-        await msg.reply_text(
-            f"✅ Capítulo(s) agregado(s) a la temporada {temporada_key[1:]}. "
-            f"Total capítulos en esta temporada: {total_chapters}.\n"
-            f"Usa /finalizar_serie para guardar la serie o /agregar_capitulo {temporada_key[1:]} para añadir más capítulos."
-        )
-
+        await update.message.reply_text("❌ Por favor, envía un video para el capítulo.")
 
 async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Finaliza y guarda la serie creada en Firestore y memoria."""
+    """Comando para finalizar la creación de la serie y publicarla."""
     user_id = update.message.from_user.id
     if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación.")
+        await update.message.reply_text("❌ No hay serie en creación para finalizar.")
         return
-    serie = current_series[user_id]
-    # Guardar en memoria global series_data
-    serie_id = serie["serie_id"]
-    # Removemos estado temporal
-    if "temporada_activa" in serie:
-        del serie["temporada_activa"]
-    series_data[serie_id] = {
-        "title": serie["title"],
-        "photo_id": serie["photo_id"],
-        "caption": serie["caption"],
-        "temporadas": serie["temporadas"],
-    }
-    save_data()
-    del current_series[user_id]
 
-    # Enviar a grupos la portada con botón "Ver Serie"
+    serie_data_to_save = current_series[user_id]
+    serie_id = serie_data_to_save["serie_id"]
+
+    # Verificar que al menos tenga una temporada y un capítulo
+    if not serie_data_to_save["temporadas"]:
+        await update.message.reply_text("❌ La serie no tiene temporadas. Añade al menos una con /agregar_temporada.")
+        return
+    
+    has_chapters = False
+    for temporada_capitulos in serie_data_to_save["temporadas"].values():
+        if temporada_capitulos:
+            has_chapters = True
+            break
+    
+    if not has_chapters:
+        await update.message.reply_text("❌ La serie no tiene capítulos. Añade al menos uno con /agregar_capitulo.")
+        return
+
+    series_data[serie_id] = serie_data_to_save
+    del current_series[user_id]
+    save_data()
+
+    # Botón para la serie
     boton = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "▶️ Ver Serie",
-                    # Al darle "Ver Serie", se redirige directamente a la lista de capítulos de la primera temporada
-                    url=f"https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}",
+                    "▶️ Ver Serie", url=f"https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}"
                 )
             ]
         ]
     )
+
+    # Enviar la serie a los chats conocidos
     for chat_id in known_chats:
         try:
             await context.bot.send_photo(
                 chat_id=chat_id,
-                photo=serie["photo_id"],
-                caption=serie["caption"],
+                photo=serie_data_to_save["photo_id"],
+                caption=f"📺 *Nueva Serie: {serie_data_to_save['title']}*\n\n{serie_data_to_save['caption']}",
                 reply_markup=boton,
+                parse_mode="Markdown",
                 protect_content=True,
             )
         except Exception as e:
-            logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
+            logger.warning(f"No se pudo enviar la serie a {chat_id}: {e}")
 
-    await update.message.reply_text("✅ Serie guardada y enviada a los grupos.")
-
-
-async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat.type in ["group", "supergroup"]:
-        if chat.id not in known_chats:
-            known_chats.add(chat.id)
-            save_data()
-            logger.info(f"Grupo registrado: {chat.id}")
+    await update.message.reply_text("✅ Serie finalizada y publicada.")
 
 
-# --- WEBHOOK aiohttp ---
-async def webhook_handler(request):
-    data = await request.json()
-    update = Update.de_json(data, app_telegram.bot)
-    await app_telegram.update_queue.put(update)
-    return web.Response(text="OK")
+# --- Handler para añadir chats a la lista de difusión (solo administradores) ---
+async def add_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id not in known_chats:
+        known_chats.add(chat_id)
+        save_data()
+        await update.message.reply_text(f"✅ Este chat ({chat_id}) ha sido añadido a la lista de difusión.")
+    else:
+        await update.message.reply_text(f"Este chat ({chat_id}) ya estaba en la lista de difusión.")
 
+async def remove_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id in known_chats:
+        known_chats.remove(chat_id)
+        save_data()
+        await update.message.reply_text(f"❌ Este chat ({chat_id}) ha sido eliminado de la lista de difusión.")
+    else:
+        await update.message.reply_text(f"Este chat ({chat_id}) no estaba en la lista de difusión.")
 
-async def on_startup(app):
-    webhook_url = f"{APP_URL}/webhook"
-    await app_telegram.bot.set_webhook(webhook_url)
-    logger.info(f"Webhook configurado en {webhook_url}")
+async def list_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if known_chats:
+        chat_list = "\n".join(list(known_chats))
+        await update.message.reply_text(f"Chats en la lista de difusión:\n{chat_list}")
+    else:
+        await update.message.reply_text("No hay chats en la lista de difusión.")
 
+# --- Funciones de administración (simplificado para este ejemplo) ---
+# En un entorno real, deberías tener un control de acceso más robusto.
+ADMIN_USER_IDS = [int(uid) for uid in os.getenv("ADMIN_IDS", "").split(',') if uid] # Carga IDs de admins desde una variable de entorno
 
-async def on_shutdown(app):
-    await app_telegram.bot.delete_webhook()
-    logger.info("Webhook eliminado")
+def is_admin(user_id):
+    return user_id in ADMIN_USER_IDS
 
+async def admin_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 No tienes permisos de administrador para usar este comando.")
+        return False
+    return True
 
-# --- App Telegram ---
-app_telegram = Application.builder().token(TOKEN).build()
-
-# Agregar handlers
-app_telegram.add_handler(CommandHandler("start", start))
-app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-app_telegram.add_handler(CallbackQueryHandler(handle_callback))
-app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
-
-# Reemplazamos handler video privado para que gestione video capítulos serie o video normal
-# Este handler capturará tanto videos individuales como aquellos que forman parte de un media_group (álbum)
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE | filters.PHOTO & filters.ChatType.PRIVATE, recibir_video_serie))
-
-app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
-
-# NUEVOS comandos para series
-app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
-app_telegram.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
-app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
-app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
-
-# --- Servidor aiohttp ---
-web_app = web.Application()
-web_app.router.add_post("/webhook", webhook_handler)
-web_app.router.add_get("/ping", lambda request: web.Response(text="✅ Bot activo."))
-web_app.on_startup.append(on_startup)
-web_app.on_shutdown.append(on_shutdown)
-
-
-async def main():
+# --- Función para cargar datos al iniciar el bot ---
+async def on_startup(application: Application):
+    logger.info("Cargando datos al iniciar el bot...")
     load_data()
-    logger.info("🤖 Bot iniciado con webhook")
+    logger.info("Datos cargados.")
 
-    # Inicializar la app de Telegram
-    await app_telegram.initialize()
-    await app_telegram.start()
+async def on_shutdown(application: Application):
+    logger.info("Guardando datos al apagar el bot...")
+    save_data()
+    logger.info("Datos guardados.")
 
-    # Iniciar el servidor aiohttp
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
+# --- Main ---
+def main():
+    application = Application.builder().token(TOKEN).build()
 
-    # Mantener la app corriendo
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("🛑 Deteniendo bot...")
-    finally:
-        await app_telegram.stop()
-        await app_telegram.shutdown()
-        await runner.cleanup()
+    # Handlers públicos
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
+    # Handlers para recibir contenido (accesible por admins o por quien sea que envíe al bot)
+    application.add_handler(MessageHandler(filters.PHOTO & filters.PRIVATE, recibir_foto))
+    application.add_handler(MessageHandler(filters.VIDEO & filters.PRIVATE, recibir_video))
+
+    # Handlers para creación de series (también para admins o usuarios con rol específico)
+    application.add_handler(CommandHandler("crear_serie", crear_serie))
+    application.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
+    application.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
+    application.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
+
+
+    # Comandos de administración (protegidos por is_admin)
+    # Considera usar un decorador o un middleware si tienes muchos comandos de admin.
+    application.add_handler(CommandHandler("add_chat", add_chat, filters=filters.User(user_id=ADMIN_USER_IDS)))
+    application.add_handler(CommandHandler("remove_chat", remove_chat, filters=filters.User(user_id=ADMIN_USER_IDS)))
+    application.add_handler(CommandHandler("list_chats", list_chats, filters=filters.User(user_id=ADMIN_USER_IDS)))
+
+    # Cargar y guardar datos al inicio/final
+    application.add_handler(CommandHandler("load_data", lambda u, c: on_startup(application) if is_admin(u.effective_user.id) else None))
+    application.add_handler(CommandHandler("save_data", lambda u, c: on_shutdown(application) if is_admin(u.effective_user.id) else None))
+
+
+    # Configurar webhook para Render
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="/webhook",
+        webhook_url=APP_URL + "/webhook",
+    )
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
-
+    main()
