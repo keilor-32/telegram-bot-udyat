@@ -136,8 +136,16 @@ def load_user_daily_views_firestore():
     docs = db.collection(COLLECTION_VIEWS).stream()
     result = {}
     for doc in docs:
-        result[doc.id] = doc.to_dict()
+        data = doc.to_dict()
+        for date_str, count in data.items():
+            if not isinstance(count, int): # Ensure count is an integer
+                try:
+                    data[date_str] = int(count)
+                except (ValueError, TypeError):
+                    data[date_str] = 0 # Default to 0 if conversion fails
+        result[doc.id] = data
     return result
+
 
 def save_known_chats_firestore():
     doc_ref = db.collection(COLLECTION_CHATS).document("chats")
@@ -1121,13 +1129,9 @@ async def health_check(request):
     return web.Response(text="Bot is running")
 
 async def webhook_handler(request):
-    # Asegúrate de que 'application' se ha inicializado y está en estado RUNNING
-    # El método _check_initialized() verifica que application._running_future esté establecido
-    # y que _is_started sea True.
-    if application is None or not application.updater.is_running: # Utiliza application.updater.is_running
-        # Si el bot no está completamente iniciado, devuelve un error o espera
-        # Para evitar el RuntimeError, puedes devolver una respuesta de error 503 o 400
-        # hasta que el bot esté listo.
+    global application # Ensure 'application' is recognized as global
+    # Check if the application is running
+    if application is None or not application.running:
         logger.warning("Webhook received before Application is fully initialized/started.")
         return web.Response(status=503, text="Bot not ready yet.")
 
@@ -1146,7 +1150,7 @@ class StateFilter(BaseFilter):
 
     def filter(self, message):
         global application
-        if application is None or not application.updater.is_running:
+        if application is None or not application.running: # Check application.running here too
             return False
 
         user_id = message.effective_user.id
@@ -1218,7 +1222,6 @@ async def main(): # Make main an async function
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     # --- Explicitly initialize the Application ---
-    # This prepares the internal structures for running
     await application.initialize()
 
     # --- Set up the webhook ---
@@ -1226,8 +1229,7 @@ async def main(): # Make main an async function
     print(f"🌐 Configurando webhook en: {webhook_url}")
     await application.bot.set_webhook(url=webhook_url)
 
-    # --- Start the Application (but not the polling updater) ---
-    # This sets _running_future and _is_started
+    # --- Start the Application (this sets application.running to True) ---
     await application.start()
 
     # --- Create and start the aiohttp web server ---
@@ -1243,10 +1245,6 @@ async def main(): # Make main an async function
 
     # Keep the aiohttp server running
     try:
-        # Instead of loop.run_forever(), we need to keep the aiohttp server alive
-        # A simple way for webhooks is to run a Future that never completes
-        # Or, ideally, use aiohttp's own run_app for simplicity if it fits.
-        # For a manually controlled loop like this, we'll just wait for the runner.
         await asyncio.Event().wait() # This will block forever
     except asyncio.CancelledError:
         pass # Expected on shutdown
