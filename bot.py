@@ -310,13 +310,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Mostrar temporadas
         botones = []
         for temporada in serie.get("temporadas", {}).keys():
-            botones.append(
-                [InlineKeyboardButton(f"Temporada {temporada[1:]}", callback_data=f"ver_{serie_id}_{temporada}")]
-            )
-        await update.message.reply_text(
-            f"📺 {serie['title']}\n\n{serie['caption']}",
-            reply_markup=InlineKeyboardMarkup(botones),
-            disable_web_page_preview=True,
+            # Cuando el usuario selecciona una temporada, vamos directamente a los capítulos
+            # La callback_data ahora incluye el índice del primer capítulo (0)
+            if serie["temporadas"][temporada]: # Solo si hay capítulos en la temporada
+                botones.append(
+                    [InlineKeyboardButton(f"Temporada {temporada[1:]}", callback_data=f"cap_{serie_id}_{temporada}_0")] # Modificado aquí
+                )
+        if not botones:
+            await update.message.reply_text("❌ Esta serie aún no tiene capítulos disponibles.")
+            return
+
+        # Enviar la imagen y sinopsis de la serie con los botones de temporada
+        await update.message.reply_photo(
+            photo=serie["photo_id"],
+            caption=f"📺 *{serie['title']}*\n\n{serie['caption']}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(botones)
         )
     else:
         await update.message.reply_text(
@@ -432,36 +441,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
 
-    # --- CORRECCIÓN AQUÍ para el error "There is no text in the message to edit" ---
-    elif data.startswith("ver_"):
-        # formato ver_{serie_id}_{temporada}
-        _, serie_id, temporada = data.split("_", 2)
-        serie = series_data.get(serie_id)
-        if not serie or temporada not in serie.get("temporadas", {}):
-            await query.message.reply_text("❌ Temporada no disponible.")
-            return
-
-        botones = []
-        for i, _ in enumerate(serie["temporadas"][temporada]):
-            botones.append(
-                [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}")]
-            )
-        
-        # Envia un nuevo mensaje con el texto y los botones de la temporada
-        await query.message.reply_text(
-            f"📺 Capítulos de Temporada {temporada[1:]}:",
-            reply_markup=InlineKeyboardMarkup(botones)
-        )
-        
-        # Elimina el mensaje anterior. Si el mensaje anterior era un video,
-        # esto evita el error de "no text to edit". Si era texto, simplemente lo elimina.
-        try:
-            await query.delete_message()
-        except Exception as e:
-            # Si hay un error (ej. el mensaje ya fue eliminado o no se puede eliminar), lo registramos.
-            logger.warning(f"No se pudo eliminar el mensaje anterior en 'ver_': {e}")
-
-
     # --- Bloque para mostrar video capítulo con navegación y seguridad de reenvíos ---
     elif data.startswith("cap_"):
         # formato cap_{serie_id}_{temporada}_{indice}
@@ -514,9 +493,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 botones_navegacion.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{temporada}_{index + 1}"))
             
             markup_buttons = [botones_navegacion] # Primera fila con navegación de capítulos
-            # Botón "Volver Temporada" en una nueva fila
-            markup_buttons.append([InlineKeyboardButton("🔙 Volver Temporada", callback_data=f"ver_{serie_id}_{temporada}")]), 
-
+            
             markup = InlineKeyboardMarkup(markup_buttons)
 
             # Enviar video con protección de contenido según el estado premium
@@ -791,50 +768,4 @@ app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_p
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 
 # NUEVO: Reemplazamos handler video privado para que gestione video capítulos serie o video normal
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
-
-app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
-
-# NUEVOS comandos para series
-app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
-app_telegram.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
-app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
-app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
-
-# --- Servidor aiohttp ---
-web_app = web.Application()
-web_app.router.add_post("/webhook", webhook_handler)
-web_app.router.add_get("/ping", lambda request: web.Response(text="✅ Bot activo."))
-web_app.on_startup.append(on_startup)
-web_app.on_shutdown.append(on_shutdown)
-
-
-async def main():
-    load_data()
-    logger.info("🤖 Bot iniciado con webhook")
-
-    # Inicializar la app de Telegram
-    await app_telegram.initialize()
-    await app_telegram.start()
-
-    # Iniciar el servidor aiohttp
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
-
-    # Mantener la app corriendo
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("🛑 Deteniendo bot...")
-    finally:
-        await app_telegram.stop()
-        await app_telegram.shutdown()
-        await runner.cleanup()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+app
