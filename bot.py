@@ -245,80 +245,67 @@ def get_main_menu():
         ]
     )
 
-
-# --- Handlers ---
-
+# --- Handler start modificado para enviar menú directo si ya está verificado ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
 
-    if args and args[0].startswith("video_"):
-        pkg_id = args[0].split("_")[1]
-        pkg = content_packages.get(pkg_id)
-        if not pkg or "video_id" not in pkg:
-            await update.message.reply_text("❌ Video no disponible.")
-            return
-
-        # Verifica suscripción a canales
+    # Primero, chequeamos si el usuario ya está suscripto a todos los canales
+    async def esta_verificado():
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
                 if member.status not in ["member", "administrator", "creator"]:
-                    await update.message.reply_text(
-                        "🔒 Para ver este contenido debes unirte a los canales.",
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
-                                    )
-                                ],
-                                [
-                                    InlineKeyboardButton(
-                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
-                                    )
-                                ],
-                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
-                            ]
-                        ),
-                    )
-                    return
-            except Exception as e:
-                logger.warning(f"Error verificando canal: {e}")
-                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
+                    return False
+            except Exception:
+                return False
+        return True
+
+    verificado = await esta_verificado()
+
+    if verificado:
+        # Si hay args para video o serie, manejamos igual que antes
+        if args and args[0].startswith("video_"):
+            pkg_id = args[0].split("_")[1]
+            pkg = content_packages.get(pkg_id)
+            if not pkg or "video_id" not in pkg:
+                await update.message.reply_text("❌ Video no disponible.")
                 return
 
-        if can_view_video(user_id):
-            await register_view(user_id)
-            await update.message.reply_video(
-                video=pkg["video_id"], caption="🎬 Aquí tienes el video completo.", protect_content=not is_premium(user_id)
+            if can_view_video(user_id):
+                await register_view(user_id)
+                await update.message.reply_video(
+                    video=pkg["video_id"], caption="🎬 Aquí tienes el video completo.", protect_content=not is_premium(user_id)
+                )
+            else:
+                await update.message.reply_text(
+                    f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
+                    "💎 Compra un plan para más acceso y reenvíos ilimitados.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+                )
+                return
+        elif args and args[0].startswith("serie_"):
+            serie_id = args[0].split("_", 1)[1]
+            serie = series_data.get(serie_id)
+            if not serie:
+                await update.message.reply_text("❌ Serie no encontrada.")
+                return
+            botones = []
+            for temporada in serie.get("temporadas", {}).keys():
+                botones.append(
+                    [InlineKeyboardButton(f"Temporada {temporada[1:]}", callback_data=f"ver_{serie_id}_{temporada}")]
+                )
+            await update.message.reply_text(
+                f"📺 {serie['title']}\n\n{serie['caption']}",
+                reply_markup=InlineKeyboardMarkup(botones),
+                disable_web_page_preview=True,
             )
         else:
-            await update.message.reply_text(
-                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
-                "💎 Compra un plan para más acceso y reenvíos ilimitados.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
-            )
-            return
-    # NUEVO: manejo de argumentos para series (ej: start=serie_serieid)
-    elif args and args[0].startswith("serie_"):
-        serie_id = args[0].split("_", 1)[1]
-        serie = series_data.get(serie_id)
-        if not serie:
-            await update.message.reply_text("❌ Serie no encontrada.")
-            return
-        # Mostrar temporadas
-        botones = []
-        for temporada in serie.get("temporadas", {}).keys():
-            botones.append(
-                [InlineKeyboardButton(f"Temporada {temporada[1:]}", callback_data=f"ver_{serie_id}_{temporada}")]
-            )
-        await update.message.reply_text(
-            f"📺 {serie['title']}\n\n{serie['caption']}",
-            reply_markup=InlineKeyboardMarkup(botones),
-            disable_web_page_preview=True,
-        )
+            # Usuario verificado sin args: mostrar menú principal directo
+            await update.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
+
     else:
+        # Usuario NO verificado: mostramos mensaje para unirse y botón verificar
         await update.message.reply_text(
             "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
             reply_markup=InlineKeyboardMarkup(
@@ -331,7 +318,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ),
         )
-
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -437,343 +423,138 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # formato ver_{serie_id}_{temporada}
         _, serie_id, temporada = data.split("_", 2)
         serie = series_data.get(serie_id)
-        if not serie or temporada not in serie.get("temporadas", {}):
-            await query.message.reply_text("❌ Temporada no disponible.")
+        if not serie:
+            await query.message.reply_text("❌ Serie no encontrada.")
+            return
+        capitulos = serie.get("temporadas", {}).get(temporada, [])
+        if not capitulos:
+            await query.message.reply_text("❌ No hay capítulos para esta temporada.")
             return
         botones = []
-        for i, _ in enumerate(serie["temporadas"][temporada]):
+        for idx, video_id in enumerate(capitulos, 1):
             botones.append(
-                [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}")]
+                [InlineKeyboardButton(f"Ver Capítulo {idx}", callback_data=f"cap_{serie_id}_{temporada}_{idx-1}")]
             )
-        await query.edit_message_text(f"📺 Capítulos de Temporada {temporada[1:]}:", reply_markup=InlineKeyboardMarkup(botones))
+        botones.append([InlineKeyboardButton("🔙 Volver Temporadas", callback_data="menu_principal")])
+        await query.message.reply_text(
+            f"📺 {serie['title']} - Temporada {temporada[1:]}\nSelecciona capítulo:",
+            reply_markup=InlineKeyboardMarkup(botones),
+        )
 
-    # NUEVO: Mostrar video capítulo con navegación
     elif data.startswith("cap_"):
-        # formato cap_{serie_id}_{temporada}_{indice}
-        _, serie_id, temporada, index = data.split("_")
-        index = int(index)
+        # formato cap_{serie_id}_{temporada}_{index}
+        _, serie_id, temporada, idx_str = data.split("_", 3)
+        idx = int(idx_str)
         serie = series_data.get(serie_id)
-        if not serie or temporada not in serie.get("temporadas", {}):
-            await query.message.reply_text("❌ Capítulo no disponible.")
+        if not serie:
+            await query.message.reply_text("❌ Serie no encontrada.")
             return
-
-        capitulos = serie["temporadas"][temporada]
-        total = len(capitulos)
-        if index < 0 or index >= total:
-            await query.message.reply_text("❌ Capítulo fuera de rango.")
+        capitulos = serie.get("temporadas", {}).get(temporada, [])
+        if idx < 0 or idx >= len(capitulos):
+            await query.message.reply_text("❌ Capítulo no válido.")
             return
+        video_id = capitulos[idx]
 
         if can_view_video(user_id):
             await register_view(user_id)
-            video_id = capitulos[index]
-
-            botones = []
-            if index > 0:
-                botones.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"cap_{serie_id}_{temporada}_{index - 1}"))
-            if index < total - 1:
-                botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{temporada}_{index + 1}"))
-            botones.append(InlineKeyboardButton("🔙 Volver Temporada", callback_data=f"ver_{serie_id}_{temporada}"))
-            markup = InlineKeyboardMarkup([botones])
-
-            # Enviar video protegido
-            await query.edit_message_media(
-                media=InputMediaVideo(media=video_id, caption=f"{serie['title']} - Temporada {temporada[1:]} Capítulo {index+1}", parse_mode="Markdown"),
-                reply_markup=markup,
-            )
+            await query.message.reply_video(video=video_id, caption=f"🎬 {serie['title']} - Capítulo {idx+1}", protect_content=not is_premium(user_id))
         else:
-            await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
+            await query.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
+                "💎 Compra un plan para más acceso y reenvíos ilimitados.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
 
-# --- Pagos ---
+# --- Manejo de mensajes ---
+async def handle_video_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Guardar video en content_packages o series según convenga
+    # Aquí solo un ejemplo simple que guarda video recibido en content_packages con ID temporal
+    user_id = update.effective_user.id
+    video = update.message.video
+    if not video:
+        return
+    pkg_id = f"pkg_{int(datetime.utcnow().timestamp())}"
+    content_packages[pkg_id] = {
+        "video_id": video.file_id,
+        "caption": update.message.caption or "Video sin descripción",
+        "photo_id": None,
+    }
+    save_data()
+    await update.message.reply_text(f"✅ Video guardado con ID {pkg_id}.")
+
+# --- PreCheckoutHandler para pagos ---
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
 
+# --- Successful Payment Handler ---
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
-    if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
-        expire_at = datetime.utcnow() + timedelta(days=30)
-        user_premium[user_id] = expire_at
-        save_data()
-        await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
+    now = datetime.utcnow()
 
-# --- Recepción contenido (sinopsis + video) ---
-async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    user_id = msg.from_user.id
-    if msg.photo and msg.caption:
-        current_photo[user_id] = {
-            "photo_id": msg.photo[-1].file_id,
-            "caption": msg.caption,
-        }
-        await msg.reply_text("✅ Sinopsis recibida. Ahora envía el video o usa /crear_serie para series.")
+    # Dependiendo del payload asignamos el plan y expiración
+    if payload == "premium_plan":
+        user_premium[user_id] = now + timedelta(days=30)
+        await update.message.reply_text("🎉 Gracias por comprar Plan Premium. Acceso ilimitado por 30 días.")
+    elif payload == "plan_pro":
+        user_premium[user_id] = now + timedelta(days=30)
+        await update.message.reply_text("🎉 Gracias por comprar Plan Pro. Acceso a 50 videos diarios por 30 días.")
+    elif payload == "plan_ultra":
+        user_premium[user_id] = now + timedelta(days=30)
+        await update.message.reply_text("🎉 Gracias por comprar Plan Ultra. Acceso ilimitado sin restricciones por 30 días.")
     else:
-        await msg.reply_text("❌ Envía una imagen con sinopsis.")
-
-async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    user_id = msg.from_user.id
-    if user_id not in current_photo:
-        await msg.reply_text("❌ Primero envía una sinopsis con imagen.")
-        return
-
-    pkg_id = str(int(datetime.utcnow().timestamp()))
-    photo_id = current_photo[user_id]["photo_id"]
-    caption = current_photo[user_id]["caption"]
-    video_id = msg.video.file_id
-
-    content_packages[pkg_id] = {
-        "photo_id": photo_id,
-        "caption": caption,
-        "video_id": video_id,
-    }
-    del current_photo[user_id]
+        await update.message.reply_text("Pago recibido, pero plan no reconocido.")
 
     save_data()
 
-    boton = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "▶️ Ver video completo", url=f"https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}"
-                )
-            ]
-        ]
-    )
-    for chat_id in known_chats:
-        try:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=photo_id,
-                caption=caption,
-                reply_markup=boton,
-                protect_content=True,
-            )
-        except Exception as e:
-            logger.warning(f"No se pudo enviar a {chat_id}: {e}")
-
-    await msg.reply_text("✅ Contenido enviado a los grupos.")
-
-# --- NUEVO: Comandos para series ---
-
-async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando para iniciar creación de serie (sinopsis + foto)."""
-    user_id = update.message.from_user.id
-    if user_id not in current_photo:
-        await update.message.reply_text("❌ Primero envía la sinopsis con imagen.")
-        return
-    # Guardar temporalmente la info de la serie para que usuario añada temporadas y capítulos
-    serie_id = str(int(datetime.utcnow().timestamp()))
-    data = current_photo[user_id]
-    current_series[user_id] = {
-        "serie_id": serie_id,
-        "title": data["caption"].split("\n")[0],  # Toma la primera línea como título
-        "photo_id": data["photo_id"],
-        "caption": data["caption"],
-        "temporadas": {},
-    }
-    del current_photo[user_id]
-    await update.message.reply_text(
-        "✅ Serie creada temporalmente.\n"
-        "Usa /agregar_temporada para añadir una temporada."
-    )
-
-async def agregar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando para añadir temporada."""
-    user_id = update.message.from_user.id
-    if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación. Usa /crear_serie primero.")
-        return
-    args = context.args
-    if not args or not args[0].isdigit():
-        await update.message.reply_text("❌ Usa /agregar_temporada N , donde N es número de temporada.")
-        return
-    temporada_num = args[0]
-    temporada_key = f"T{temporada_num}"
-    serie = current_series[user_id]
-    if temporada_key in serie["temporadas"]:
-        await update.message.reply_text(f"❌ La temporada {temporada_num} ya existe.")
-        return
-    serie["temporadas"][temporada_key] = []
-    await update.message.reply_text(f"✅ Temporada {temporada_num} agregada.\nAhora envía los videos de capítulos a esta temporada usando /agregar_capitulo {temporada_num}")
-
-async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando para agregar capítulo a temporada."""
-    user_id = update.message.from_user.id
-    if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación. Usa /crear_serie primero.")
-        return
-    args = context.args
-    if len(args) < 1 or not args[0].isdigit():
-        await update.message.reply_text("❌ Usa /agregar_capitulo N y envía el video en el mismo mensaje o tras este comando.")
-        return
-    temporada_num = args[0]
-    temporada_key = f"T{temporada_num}"
-    serie = current_series[user_id]
-    if temporada_key not in serie["temporadas"]:
-        await update.message.reply_text(f"❌ La temporada {temporada_num} no existe. Añádela con /agregar_temporada {temporada_num}")
-        return
-    # Esperamos que el siguiente mensaje sea un video (podríamos mejorar con un estado, pero simplificamos)
-    await update.message.reply_text(
-        f"📽️ Por favor envía ahora el video para el capítulo de la temporada {temporada_num}."
-    )
-    # Guardamos temporada activa para el usuario para el siguiente video
-    serie["temporada_activa"] = temporada_key
-
-async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Para recibir video y asignarlo como capítulo si el usuario está en proceso de agregar capítulo a temporada."""
-    msg = update.message
-    user_id = msg.from_user.id
-    if user_id not in current_series:
-        # No estamos en proceso de crear capítulo
-        await recibir_video(update, context)
-        return
-
-    serie = current_series[user_id]
-    if "temporada_activa" not in serie:
-        await recibir_video(update, context)
-        return
-
-    if not msg.video:
-        await msg.reply_text("❌ Envía un video válido para el capítulo.")
-        return
-
-    temporada_key = serie["temporada_activa"]
-    video_id = msg.video.file_id
-    serie["temporadas"][temporada_key].append(video_id)
-
-    await msg.reply_text(f"✅ Capítulo agregado a la temporada {temporada_key[1:]}. Usa /finalizar_serie para guardar la serie o /agregar_capitulo {temporada_key[1:]} para añadir otro capítulo.")
-
-async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Finaliza y guarda la serie creada en Firestore y memoria."""
-    user_id = update.message.from_user.id
-    if user_id not in current_series:
-        await update.message.reply_text("❌ No hay serie en creación.")
-        return
-    serie = current_series[user_id]
-    # Guardar en memoria global series_data
-    serie_id = serie["serie_id"]
-    # Removemos estado temporal
-    if "temporada_activa" in serie:
-        del serie["temporada_activa"]
-    series_data[serie_id] = {
-        "title": serie["title"],
-        "photo_id": serie["photo_id"],
-        "caption": serie["caption"],
-        "temporadas": serie["temporadas"],
-    }
-    save_data()
-    del current_series[user_id]
-
-    # Enviar a grupos la portada con botón "Ver Serie"
-    boton = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "▶️ Ver Serie",
-                    url=f"https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}",
-                )
-            ]
-        ]
-    )
-    for chat_id in known_chats:
-        try:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=serie["photo_id"],
-                caption=serie["caption"],
-                reply_markup=boton,
-                protect_content=True,
-            )
-        except Exception as e:
-            logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
-
-    await update.message.reply_text("✅ Serie guardada y enviada a los grupos.")
-
-
-async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat.type in ["group", "supergroup"]:
-        if chat.id not in known_chats:
-            known_chats.add(chat.id)
-            save_data()
-            logger.info(f"Grupo registrado: {chat.id}")
-
-
-# --- WEBHOOK aiohttp ---
+# --- Webhook para Render ---
 async def webhook_handler(request):
+    app = request.app
     data = await request.json()
-    update = Update.de_json(data, app_telegram.bot)
-    await app_telegram.update_queue.put(update)
+    update = Update.de_json(data, app.bot)
+    await app.bot.process_update(update)
     return web.Response(text="OK")
 
-
-async def on_startup(app):
-    webhook_url = f"{APP_URL}/webhook"
-    await app_telegram.bot.set_webhook(webhook_url)
-    logger.info(f"Webhook configurado en {webhook_url}")
-
-
-async def on_shutdown(app):
-    await app_telegram.bot.delete_webhook()
-    logger.info("Webhook eliminado")
-
-
-# --- App Telegram ---
-app_telegram = Application.builder().token(TOKEN).build()
-
-# Agregar handlers
-app_telegram.add_handler(CommandHandler("start", start))
-app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-app_telegram.add_handler(CallbackQueryHandler(handle_callback))
-app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
-
-# NUEVO: Reemplazamos handler video privado para que gestione video capítulos serie o video normal
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
-
-app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
-
-# NUEVOS comandos para series
-app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
-app_telegram.add_handler(CommandHandler("agregar_temporada", agregar_temporada))
-app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
-app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
-
-# --- Servidor aiohttp ---
-web_app = web.Application()
-web_app.router.add_post("/webhook", webhook_handler)
-web_app.router.add_get("/ping", lambda request: web.Response(text="✅ Bot activo."))
-web_app.on_startup.append(on_startup)
-web_app.on_shutdown.append(on_shutdown)
-
-
-async def main():
+# --- Main ---
+def main():
     load_data()
-    logger.info("🤖 Bot iniciado con webhook")
 
-    # Inicializar la app de Telegram
-    await app_telegram.initialize()
-    await app_telegram.start()
+    app = Application.builder().token(TOKEN).build()
 
-    # Iniciar el servidor aiohttp
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+    app.add_handler(MessageHandler(filters.VIDEO, handle_video_message))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    # Mantener la app corriendo
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("🛑 Deteniendo bot...")
-    finally:
-        await app_telegram.stop()
-        await app_telegram.shutdown()
-        await runner.cleanup()
+    # Si usas webhook con aiohttp y Render
+    if APP_URL:
+        async def run_webhook():
+            bot = app.bot
 
+            async def handler(request):
+                data = await request.json()
+                update = Update.de_json(data, bot)
+                await bot.process_update(update)
+                return web.Response(text="OK")
+
+            app_aiohttp = web.Application()
+            app_aiohttp.add_routes([web.post(f"/{TOKEN}", handler)])
+            runner = web.AppRunner(app_aiohttp)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", PORT)
+            await site.start()
+            print(f"Webhook escuchando en puerto {PORT}...")
+            while True:
+                await asyncio.sleep(3600)
+
+        asyncio.run(run_webhook())
+
+    else:
+        # Polling para pruebas locales
+        app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
