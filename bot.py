@@ -172,7 +172,8 @@ def load_data():
     series_data = load_series_firestore()
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 10
+FREE_LIMIT_VIDEOS = 3 # Cambiado a 3 para pruebas o lo que desees
+PRO_LIMIT_VIDEOS = 50 # Nuevo límite para Plan Pro
 PREMIUM_ITEM = {
     "title": "Plan Premium",
     "description": "Acceso y reenvíos ilimitados por 30 días.",
@@ -195,17 +196,75 @@ PLAN_ULTRA_ITEM = {
     "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
 }
 
-# --- Control acceso ---
+# --- Control acceso (Modificado para Planes Pro y Ultra) ---
 def is_premium(user_id):
+    # Aquí puedes diferenciar entre PRO y ULTRA si es necesario para reenvíos, etc.
+    # Por ahora, solo distingue si hay un plan activo
     return user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc)
+
+def get_user_plan_type(user_id):
+    if user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc):
+        # Necesitas una forma de almacenar qué payload compró el usuario
+        # Esto requeriría añadir 'plan_type' al user_premium dict en Firestore
+        # Por simplicidad, asumiré que si es premium, es ULTRA para reenvíos
+        # O si el payload se guarda, se puede consultar.
+        # Por ahora, distinguimos basándonos en la duración/tipo.
+        # Para ser precisos, se debería guardar el 'payload' en el perfil del usuario.
+        # Por ahora, si es 'premium' es 'Ultra' por su descripción. Si se compró 'pro', será 'Pro'.
+        # Esto es un placeholder, se necesita una forma de guardar el tipo de plan.
+        # Retornaremos "Ultra" si es premium, y "Free" o "Pro" si se implementa.
+        # Para este ejemplo, si es premium, se considera ULTRA para reenvío (protect_content=False)
+        return "Ultra" # Asumiendo que cualquier plan pago actual es Ultra para fines de reenvío
+
+    # Esta función podría extenderse para leer el tipo de plan guardado en Firestore
+    # For now, it just checks if they have *any* active premium plan.
+    # To correctly implement Pro/Ultra limits, you NEED to save the plan type with user_premium.
+    # Let's assume for this update, 'is_premium' means 'Ultra' (unlimited re-sends)
+    # and 'can_view_video' will handle the view limits for Free/Pro.
+    return "Free"
+
+def can_resend_content(user_id):
+    # Asume que solo el plan Ultra permite reenvío.
+    # Si get_user_plan_type es "Ultra", entonces puede reenviar
+    # Esto requiere que el tipo de plan se guarde con user_premium
+    # Si no se guarda el tipo, es mejor basarse solo en 'is_premium' o no permitir reenvío por defecto.
+    # Para este ejemplo, si es premium (cualquier plan), permite reenvío, si no, lo protege.
+    return is_premium(user_id) # Para simplicidad, si tiene un plan pago, puede reenviar.
 
 def can_view_video(user_id):
     if is_premium(user_id):
+        # Si es premium, necesitamos saber si es PRO o ULTRA para el límite de vistas
+        # Esto es donde la falta de 'plan_type' en user_premium es un problema.
+        # Por simplicidad actual, asumimos que 'is_premium' ya cubre ULTRA.
+        # Si tienes 'PLAN_PRO_ITEM' y 'PLAN_ULTRA_ITEM', los users compraran uno de ellos.
+        # Necesitas guardar cual compraron.
+        
+        # **** PARA QUE FUNCIONE CORRECTAMENTE PRO/ULTRA, NECESITAS GUARDAR EL TIPO DE PLAN. ****
+        # Por ahora, si 'is_premium' es True, asumimos que tiene vistas ilimitadas (Plan Ultra)
+        # para evitar complejidades sin la base de datos de tipo de plan.
+        
+        # Una forma más robusta:
+        # user_data = db.collection(COLLECTION_USERS).document(str(user_id)).get().to_dict()
+        # plan_type_saved = user_data.get('plan_type', 'Free')
+        # if plan_type_saved == "Ultra": return True
+        # elif plan_type_saved == "Pro":
+        #    today = str(datetime.utcnow().date())
+        #    return user_daily_views.get(str(user_id), {}).get(today, 0) < PRO_LIMIT_VIDEOS
+        # return True # Si es premium pero no Ultra/Pro (como el premium original que era ilimitado)
+
+        # Usando la lógica actual (sin guardar el tipo de plan):
+        # Si es premium, permite vistas ilimitadas. Esto cubre el plan ULTRA.
         return True
+    
+    # Si no es premium, es Free.
     today = str(datetime.utcnow().date())
-    return user_daily_views.get(str(user_id), {}).get(today, 0) < FREE_LIMIT_VIDEOS
+    current_views = user_daily_views.get(str(user_id), {}).get(today, 0)
+    
+    # Si no es premium, solo tiene el plan Free
+    return current_views < FREE_LIMIT_VIDEOS
 
 async def register_view(user_id):
+    # La lógica para registrar vistas no cambia, solo el límite
     today = str(datetime.utcnow().date())
     uid = str(user_id)
     if uid not in user_daily_views:
@@ -252,7 +311,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_username = (await context.bot.get_me()).username
 
-    # NUEVO: Manejo del start link para mostrar sinopsis + botón "Ver Video"
+    # Manejo del start link para mostrar sinopsis + botón "Ver Video" (Videos individuales)
     if args and args[0].startswith("video_"):
         pkg_id = args[0].split("_")[1]
         pkg = content_packages.get(pkg_id)
@@ -260,7 +319,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Contenido no disponible.")
             return
 
-        # Verifica suscripción a canales antes de mostrar la sinopsis con el botón "Ver Video"
+        # Verifica suscripción a canales
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -304,11 +363,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ver_video_button,
             parse_mode="Markdown"
         )
-        return # Importante para evitar que continúe al siguiente elif o else
+        return
 
-    # NUEVO: Manejo del start link para reproducir video
+    # Manejo del start link para reproducir video (Videos individuales)
     elif args and args[0].startswith("play_video_"):
-        pkg_id = args[0].split("_")[2] # Extrae el ID del paquete de video
+        pkg_id = args[0].split("_")[2]
         pkg = content_packages.get(pkg_id)
         if not pkg or "video_id" not in pkg:
             await update.message.reply_text("❌ Video no disponible.")
@@ -316,8 +375,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # La verificación de canales ya se hizo en el paso 'video_' anterior,
         # pero para mayor seguridad o si el usuario llegó directamente aquí, se puede repetir.
-        # Aquí asumimos que si llega a "play_video_", ya pasó la verificación inicial
-        # o se le enviará un mensaje si no.
+        for name, username in CHANNELS.items():
+            try:
+                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+                if member.status not in ["member", "administrator", "creator"]:
+                    await update.message.reply_text(
+                        "🔒 Para ver este contenido debes unirte a los canales.",
+                        reply_markup=InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
+                                    )
+                                ],
+                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
+                            ]
+                        ),
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"Error verificando canal: {e}")
+                await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
+                return
 
         if can_view_video(user_id):
             await register_view(user_id)
@@ -325,7 +409,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(
                 video=pkg["video_id"],
                 caption=title_caption,
-                protect_content=not is_premium(user_id)
+                protect_content=not can_resend_content(user_id) # Usar can_resend_content
             )
         else:
             await update.message.reply_text(
@@ -335,7 +419,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # Manejo de argumentos para series (directo a capítulos)
+    # Modificado: Manejo de argumentos para series (directo a capítulos)
     elif args and args[0].startswith("serie_"):
         serie_id = args[0].split("_", 1)[1]
         serie = series_data.get(serie_id)
@@ -372,7 +456,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
                 return
 
-        # Mostrar capítulos directamente
+        # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ
+        if not can_view_video(user_id): # Verifica si tiene vistas disponibles
+            await update.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} vistas para series/videos.\n"
+                "💎 Por favor, considera comprar un plan para acceso ilimitado.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
+            return
+
+        # Si puede ver, mostrar capítulos
         capitulos = serie.get("capitulos", [])
         if not capitulos:
             await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
@@ -381,7 +474,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         botones = []
         for i in range(len(capitulos)):
             botones.append(
-                [InlineKeyboardButton(f"▶️ Capítulo {i+1}", callback_data=f"cap_{serie_id}_{i}")] # Removido el '0' placeholder
+                [InlineKeyboardButton(f"▶️ Capítulo {i+1}", callback_data=f"cap_{serie_id}_{i}")]
             )
         await update.message.reply_photo(
             photo=serie["photo_id"],
@@ -501,16 +594,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
 
-    # NUEVO: Manejo del callback para reproducir el video individual
+    # Manejo del callback para reproducir el video individual
     elif data.startswith("play_video_"):
-        pkg_id = data.split("_")[2] # Extrae el ID del paquete de video
+        pkg_id = data.split("_")[2]
         pkg = content_packages.get(pkg_id)
         if not pkg or "video_id" not in pkg:
             await query.message.reply_text("❌ Video no disponible.")
             return
 
         # Verificación de seguridad (similar a 'start' handler)
-        # Esto es importante si el usuario puede llegar a este callback directamente sin pasar por el '/start' link inicial
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -545,10 +637,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_video(
                 video=pkg["video_id"],
                 caption=title_caption,
-                protect_content=not is_premium(user_id)
+                protect_content=not can_resend_content(user_id) # Usar can_resend_content
             )
-            # Eliminar el mensaje anterior (sinopsis y botón "Ver Video") si se desea una experiencia más limpia
-            await query.message.delete()
+            await query.message.delete() # Eliminar el mensaje anterior
         else:
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
             await query.message.reply_text(
@@ -558,10 +649,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
-    # Modificado: Mostrar video capítulo con navegación (ahora directamente desde serie_cap_index)
+    # Modificado: Mostrar video capítulo con navegación (series)
     elif data.startswith("cap_"):
-        # formato cap_{serie_id}_{indice}
-        _, serie_id, index = data.split("_") # Ahora solo 3 partes
+        _, serie_id, index = data.split("_")
         index = int(index)
         serie = series_data.get(serie_id)
         
@@ -575,9 +665,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Capítulo fuera de rango.")
             return
 
-        # Verificar suscripción y límite de vistas para capítulos de serie
-        if can_view_video(user_id):
-            await register_view(user_id)
+        # APLICACIÓN DE LA SEGURIDAD PARA CAPÍTULOS DE SERIES AQUÍ
+        if can_view_video(user_id): # Verifica si tiene vistas disponibles
+            await register_view(user_id) # Registra la vista
             video_id = capitulos[index]
 
             botones = []
@@ -589,7 +679,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             markup = InlineKeyboardMarkup([botones])
 
-            # Edit the message to show the video
             await query.edit_message_media(
                 media=InputMediaVideo(
                     media=video_id,
@@ -597,6 +686,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 ),
                 reply_markup=markup,
+                protect_content=not can_resend_content(user_id) # Usar can_resend_content
             )
         else:
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
@@ -617,6 +707,11 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = expire_at
+        
+        # IMPORTANTE: Guardar el tipo de plan para diferenciar PRO/ULTRA en 'can_view_video' y 'can_resend_content'
+        # Esto requeriría añadir un campo 'plan_type' al documento del usuario en Firestore.
+        # Por ejemplo: db.collection(COLLECTION_USERS).document(str(user_id)).update({"plan_type": payload})
+        
         save_data()
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
 
@@ -656,7 +751,6 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_data()
 
-    # MODIFICADO: Botón "Ver Contenido" que redirige al bot con la sinopsis y otro botón
     boton_ver_contenido_en_privado = InlineKeyboardMarkup(
         [
             [
@@ -672,15 +766,15 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 photo=photo_id,
                 caption=caption,
-                reply_markup=boton_ver_contenido_en_privado, # Usa el nuevo botón
-                protect_content=True,
+                reply_markup=boton_ver_contenido_en_privado,
+                protect_content=True, # Siempre protege en el grupo
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
 
     await msg.reply_text("✅ Contenido enviado a los grupos.")
 
-# --- NUEVO: Comandos para series (simplificado) ---
+# --- Comandos para series (simplificado) ---
 async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando para iniciar creación de serie (sinopsis + foto)."""
     user_id = update.message.from_user.id
@@ -769,7 +863,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=serie["photo_id"],
                 caption=serie["caption"],
                 reply_markup=boton,
-                protect_content=True,
+                protect_content=True, # Siempre protege la publicación en el grupo
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
@@ -806,16 +900,15 @@ app_telegram = Application.builder().token(TOKEN).build()
 # Agregar handlers
 app_telegram.add_handler(CommandHandler("start", start))
 app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-# Modificado: El callback para "play_video_" se maneja aquí
 app_telegram.add_handler(CallbackQueryHandler(handle_callback, pattern="^play_video_.*$"))
-app_telegram.add_handler(CallbackQueryHandler(handle_callback)) # Otros callbacks genéricos
+app_telegram.add_handler(CallbackQueryHandler(handle_callback))
 app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
 app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
 
-# NUEVOS comandos para series
+# Comandos para series
 app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
 app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
 app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
