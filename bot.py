@@ -241,8 +241,8 @@ async def register_view(user_id):
 
 # --- Canales para verificación ---
 CHANNELS = {
-    "supertvw2": "@Supertvw2",
-    "fullvvd": "@fullvvd",
+    "canal_1": "https://t.me/+rzFyi_cr_T1kNTAx",
+    "canal_2": "@Jhonmaxs",
 }
 
 # --- Menú principal ---
@@ -315,12 +315,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
                                     )
                                 ],
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
                                     )
                                 ],
                                 [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
@@ -370,12 +370,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
                                     )
                                 ],
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
                                     )
                                 ],
                                 [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
@@ -423,12 +423,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
                                     )
                                 ],
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
                                     )
                                 ],
                                 [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
@@ -467,12 +467,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
+            "👋 ¡Hola! primero debes unirte a todos nuestros canales para usar este bot una ves te hayas unido haz click en verificar suscripcion para continuar.",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
-                        InlineKeyboardButton("🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"),
-                        InlineKeyboardButton("🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"),
+                        InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"),
+                        InlineKeyboardButton("🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"),
                     ],
                     [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
                 ]
@@ -601,12 +601,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
                                     )
                                 ],
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
+                                        "🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"
                                     )
                                 ],
                                 [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
