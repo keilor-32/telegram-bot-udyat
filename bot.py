@@ -208,8 +208,6 @@ def get_user_plan_type(user_id):
         # Esto requeriría añadir 'plan_type' al user_premium dict en Firestore
         # Por simplicidad, asumiré que si es premium, es ULTRA para reenvíos
         # O si el payload se guarda, se puede consultar.
-        # Por ahora, distinguimos basándonos en la duración/tipo.
-        # Para ser precisos, se debería guardar el 'payload' en el perfil del usuario.
         # Por ahora, si es 'premium' es 'Ultra' por su descripción. Si se compró 'pro', será 'Pro'.
         # Esto es un placeholder, se necesita una forma de guardar el tipo de plan.
         # Retornaremos "Ultra" si es premium, y "Free" o "Pro" si se implementa.
@@ -228,7 +226,7 @@ def can_resend_content(user_id):
     # Si get_user_plan_type es "Ultra", entonces puede reenviar
     # Esto requiere que el tipo de plan se guarde con user_premium
     # Si no se guarda el tipo, es mejor basarse solo en 'is_premium' o no permitir reenvío por defecto.
-    # Para este ejemplo, si es premium (cualquier plan), permite reenvío, si no, lo protege.
+    # Para este ejemplo, si es premium (cualquier plan), permite reenvío.
     return is_premium(user_id) # Para simplicidad, si tiene un plan pago, puede reenviar.
 
 def can_view_video(user_id):
@@ -686,7 +684,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 ),
                 reply_markup=markup,
-                protect_content=not can_resend_content(user_id) # Usar can_resend_content
+                # ELIMINADO: protect_content=not can_resend_content(user_id) # Este argumento no es válido para edit_message_media
             )
         else:
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
