@@ -370,7 +370,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1']"
                                     )
                                 ],
                                 [
