@@ -245,28 +245,30 @@ def get_main_menu():
         ]
     )
 
-# --- Handler start modificado para enviar menú directo si ya está verificado ---
+# --- Handler /start corregido ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
     user_id = update.effective_user.id
 
-    # Primero, chequeamos si el usuario ya está suscripto a todos los canales
+    logger.info(f"/start recibido de {user_id}")
+
     async def esta_verificado():
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
                 if member.status not in ["member", "administrator", "creator"]:
                     return False
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error verificando canal {username} para user {user_id}: {e}")
                 return False
         return True
 
     verificado = await esta_verificado()
 
+    args = context.args if update.message and update.message.text else []
+
     if verificado:
-        # Si hay args para video o serie, manejamos igual que antes
         if args and args[0].startswith("video_"):
-            pkg_id = args[0].split("_")[1]
+            pkg_id = args[0].split("_", 1)[1]
             pkg = content_packages.get(pkg_id)
             if not pkg or "video_id" not in pkg:
                 await update.message.reply_text("❌ Video no disponible.")
@@ -284,6 +286,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
                 )
                 return
+
         elif args and args[0].startswith("serie_"):
             serie_id = args[0].split("_", 1)[1]
             serie = series_data.get(serie_id)
@@ -301,11 +304,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True,
             )
         else:
-            # Usuario verificado sin args: mostrar menú principal directo
             await update.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
-
     else:
-        # Usuario NO verificado: mostramos mensaje para unirse y botón verificar
         await update.message.reply_text(
             "👋 ¡Hola! Para acceder al contenido exclusivo debes unirte a los canales y verificar.",
             reply_markup=InlineKeyboardMarkup(
@@ -336,7 +336,6 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("📋 Menú principal:", reply_markup=get_main_menu())
     else:
         await query.edit_message_text("❌ Aún no estás suscrito a:\n" + "\n".join(not_joined))
-
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -423,41 +422,46 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # formato ver_{serie_id}_{temporada}
         _, serie_id, temporada = data.split("_", 2)
         serie = series_data.get(serie_id)
-        if not serie:
-            await query.message.reply_text("❌ Serie no encontrada.")
-            return
-        capitulos = serie.get("temporadas", {}).get(temporada, [])
-        if not capitulos:
-            await query.message.reply_text("❌ No hay capítulos para esta temporada.")
+        if not serie or temporada not in serie.get("temporadas", {}):
+            await query.message.reply_text("❌ Temporada no disponible.")
             return
         botones = []
-        for idx, video_id in enumerate(capitulos, 1):
+        for i, _ in enumerate(serie["temporadas"][temporada]):
             botones.append(
-                [InlineKeyboardButton(f"Ver Capítulo {idx}", callback_data=f"cap_{serie_id}_{temporada}_{idx-1}")]
+                [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}")]
             )
-        botones.append([InlineKeyboardButton("🔙 Volver Temporadas", callback_data="menu_principal")])
-        await query.message.reply_text(
-            f"📺 {serie['title']} - Temporada {temporada[1:]}\nSelecciona capítulo:",
-            reply_markup=InlineKeyboardMarkup(botones),
-        )
+        await query.edit_message_text(f"📺 Capítulos de Temporada {temporada[1:]}:", reply_markup=InlineKeyboardMarkup(botones))
 
+    # NUEVO: Mostrar video capítulo con navegación
     elif data.startswith("cap_"):
-        # formato cap_{serie_id}_{temporada}_{index}
-        _, serie_id, temporada, idx_str = data.split("_", 3)
-        idx = int(idx_str)
+        # formato cap_{serie_id}_{temporada}_{indice}
+        _, serie_id, temporada, index = data.split("_")
+        index = int(index)
         serie = series_data.get(serie_id)
-        if not serie:
-            await query.message.reply_text("❌ Serie no encontrada.")
+        if not serie or temporada not in serie.get("temporadas", {}):
+            await query.message.reply_text("❌ Capítulo no disponible.")
             return
-        capitulos = serie.get("temporadas", {}).get(temporada, [])
-        if idx < 0 or idx >= len(capitulos):
-            await query.message.reply_text("❌ Capítulo no válido.")
-            return
-        video_id = capitulos[idx]
 
+        capitulos = serie["temporadas"][temporada]
+        total = len(capitulos)
+        if index < 0 or index >= total:
+            await query.message.reply_text("❌ Capítulo fuera de rango.")
+            return
+
+        video_id = capitulos[index]
+
+        # Botones para siguiente, anterior, volver temporada
+        botones = []
+        if index > 0:
+            botones.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"cap_{serie_id}_{temporada}_{index-1}"))
+        if index < total - 1:
+            botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{temporada}_{index+1}"))
+        botones.append(InlineKeyboardButton("🔙 Volver Temporada", callback_data=f"ver_{serie_id}_{temporada}"))
+
+        # Enviar video protegido o solo si el usuario puede
         if can_view_video(user_id):
             await register_view(user_id)
-            await query.message.reply_video(video=video_id, caption=f"🎬 {serie['title']} - Capítulo {idx+1}", protect_content=not is_premium(user_id))
+            await query.message.reply_video(video=video_id, caption=f"📺 Capítulo {index+1} de Temporada {temporada[1:]}", reply_markup=InlineKeyboardMarkup([botones]))
         else:
             await query.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
@@ -465,96 +469,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
             )
 
-# --- Manejo de mensajes ---
-async def handle_video_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Guardar video en content_packages o series según convenga
-    # Aquí solo un ejemplo simple que guarda video recibido en content_packages con ID temporal
-    user_id = update.effective_user.id
-    video = update.message.video
-    if not video:
-        return
-    pkg_id = f"pkg_{int(datetime.utcnow().timestamp())}"
-    content_packages[pkg_id] = {
-        "video_id": video.file_id,
-        "caption": update.message.caption or "Video sin descripción",
-        "photo_id": None,
-    }
-    save_data()
-    await update.message.reply_text(f"✅ Video guardado con ID {pkg_id}.")
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Aquí manejas mensajes de usuarios, como envío de videos o imágenes
+    # Puedes extender esta función según tu lógica
+    await update.message.reply_text("📩 Mensaje recibido. Usa /start para comenzar.")
 
-# --- PreCheckoutHandler para pagos ---
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
     await query.answer(ok=True)
 
-# --- Successful Payment Handler ---
-async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
+    logger.info(f"Pago exitoso de {user_id} para {payload}")
+
+    # Asignar fecha de expiración según el plan comprado
     now = datetime.utcnow()
-
-    # Dependiendo del payload asignamos el plan y expiración
-    if payload == "premium_plan":
-        user_premium[user_id] = now + timedelta(days=30)
-        await update.message.reply_text("🎉 Gracias por comprar Plan Premium. Acceso ilimitado por 30 días.")
-    elif payload == "plan_pro":
-        user_premium[user_id] = now + timedelta(days=30)
-        await update.message.reply_text("🎉 Gracias por comprar Plan Pro. Acceso a 50 videos diarios por 30 días.")
-    elif payload == "plan_ultra":
-        user_premium[user_id] = now + timedelta(days=30)
-        await update.message.reply_text("🎉 Gracias por comprar Plan Ultra. Acceso ilimitado sin restricciones por 30 días.")
-    else:
-        await update.message.reply_text("Pago recibido, pero plan no reconocido.")
-
+    expire_at = now + timedelta(days=30)
+    user_premium[user_id] = expire_at
     save_data()
 
-# --- Webhook para Render ---
-async def webhook_handler(request):
-    app = request.app
-    data = await request.json()
-    update = Update.de_json(data, app.bot)
-    await app.bot.process_update(update)
-    return web.Response(text="OK")
+    await update.message.reply_text(
+        f"✅ ¡Gracias por tu compra! Tu plan es válido hasta {expire_at.strftime('%Y-%m-%d')}."
+    )
 
 # --- Main ---
-def main():
+async def on_startup(app):
     load_data()
+    logger.info("Datos cargados desde Firestore.")
 
-    app = Application.builder().token(TOKEN).build()
+async def main():
+    application = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-    app.add_handler(MessageHandler(filters.VIDEO, handle_video_message))
-    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
 
-    # Si usas webhook con aiohttp y Render
-    if APP_URL:
-        async def run_webhook():
-            bot = app.bot
+    # Webhook si quieres (descomenta si usas webhook)
+    # application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN,
+    #                        webhook_url=f"{APP_URL}/{TOKEN}")
 
-            async def handler(request):
-                data = await request.json()
-                update = Update.de_json(data, bot)
-                await bot.process_update(update)
-                return web.Response(text="OK")
-
-            app_aiohttp = web.Application()
-            app_aiohttp.add_routes([web.post(f"/{TOKEN}", handler)])
-            runner = web.AppRunner(app_aiohttp)
-            await runner.setup()
-            site = web.TCPSite(runner, "0.0.0.0", PORT)
-            await site.start()
-            print(f"Webhook escuchando en puerto {PORT}...")
-            while True:
-                await asyncio.sleep(3600)
-
-        asyncio.run(run_webhook())
-
-    else:
-        # Polling para pruebas locales
-        app.run_polling()
+    # O polling para desarrollo/local
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
