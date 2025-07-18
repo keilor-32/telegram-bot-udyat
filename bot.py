@@ -172,8 +172,8 @@ def load_data():
     series_data = load_series_firestore()
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 3 # Cambiado a 3 para pruebas o lo que desees
-PRO_LIMIT_VIDEOS = 50 # Nuevo límite para Plan Pro
+FREE_LIMIT_VIDEOS = 3
+PRO_LIMIT_VIDEOS = 50
 PREMIUM_ITEM = {
     "title": "Plan Premium",
     "description": "Acceso y reenvíos ilimitados por 30 días.",
@@ -196,73 +196,25 @@ PLAN_ULTRA_ITEM = {
     "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
 }
 
-# --- Control acceso (Modificado para Planes Pro y Ultra) ---
+# --- Control acceso ---
 def is_premium(user_id):
-    # Aquí puedes diferenciar entre PRO y ULTRA si es necesario para reenvíos, etc.
-    # Por ahora, solo distingue si hay un plan activo
     return user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc)
 
-def get_user_plan_type(user_id):
-    if user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc):
-        # Necesitas una forma de almacenar qué payload compró el usuario
-        # Esto requeriría añadir 'plan_type' al user_premium dict en Firestore
-        # Por simplicidad, asumiré que si es premium, es ULTRA para reenvíos
-        # O si el payload se guarda, se puede consultar.
-        # Por ahora, si es 'premium' es 'Ultra' por su descripción. Si se compró 'pro', será 'Pro'.
-        # Esto es un placeholder, se necesita una forma de guardar el tipo de plan.
-        # Retornaremos "Ultra" si es premium, y "Free" o "Pro" si se implementa.
-        # Para este ejemplo, si es premium, se considera ULTRA para reenvío (protect_content=False)
-        return "Ultra" # Asumiendo que cualquier plan pago actual es Ultra para fines de reenvío
-
-    # Esta función podría extenderse para leer el tipo de plan guardado en Firestore
-    # For now, it just checks if they have *any* active premium plan.
-    # To correctly implement Pro/Ultra limits, you NEED to save the plan type with user_premium.
-    # Let's assume for this update, 'is_premium' means 'Ultra' (unlimited re-sends)
-    # and 'can_view_video' will handle the view limits for Free/Pro.
-    return "Free"
-
 def can_resend_content(user_id):
-    # Asume que solo el plan Ultra permite reenvío.
-    # Si get_user_plan_type es "Ultra", entonces puede reenviar
-    # Esto requiere que el tipo de plan se guarde con user_premium
-    # Si no se guarda el tipo, es mejor basarse solo en 'is_premium' o no permitir reenvío por defecto.
-    # Para este ejemplo, si es premium (cualquier plan), permite reenvío.
-    return is_premium(user_id) # Para simplicidad, si tiene un plan pago, puede reenviar.
+    return is_premium(user_id)
 
 def can_view_video(user_id):
     if is_premium(user_id):
-        # Si es premium, necesitamos saber si es PRO o ULTRA para el límite de vistas
-        # Esto es donde la falta de 'plan_type' en user_premium es un problema.
-        # Por simplicidad actual, asumimos que 'is_premium' ya cubre ULTRA.
-        # Si tienes 'PLAN_PRO_ITEM' y 'PLAN_ULTRA_ITEM', los users compraran uno de ellos.
-        # Necesitas guardar cual compraron.
-        
-        # **** PARA QUE FUNCIONE CORRECTAMENTE PRO/ULTRA, NECESITAS GUARDAR EL TIPO DE PLAN. ****
-        # Por ahora, si 'is_premium' es True, asumimos que tiene vistas ilimitadas (Plan Ultra)
-        # para evitar complejidades sin la base de datos de tipo de plan.
-        
-        # Una forma más robusta:
-        # user_data = db.collection(COLLECTION_USERS).document(str(user_id)).get().to_dict()
-        # plan_type_saved = user_data.get('plan_type', 'Free')
-        # if plan_type_saved == "Ultra": return True
-        # elif plan_type_saved == "Pro":
-        #    today = str(datetime.utcnow().date())
-        #    return user_daily_views.get(str(user_id), {}).get(today, 0) < PRO_LIMIT_VIDEOS
-        # return True # Si es premium pero no Ultra/Pro (como el premium original que era ilimitado)
-
-        # Usando la lógica actual (sin guardar el tipo de plan):
-        # Si es premium, permite vistas ilimitadas. Esto cubre el plan ULTRA.
+        # Asumiendo que 'is_premium' True significa Plan Ultra (vistas ilimitadas)
+        # Si se necesita diferenciar PRO/ULTRA, se debe guardar el tipo de plan en Firestore
         return True
     
     # Si no es premium, es Free.
     today = str(datetime.utcnow().date())
     current_views = user_daily_views.get(str(user_id), {}).get(today, 0)
-    
-    # Si no es premium, solo tiene el plan Free
     return current_views < FREE_LIMIT_VIDEOS
 
 async def register_view(user_id):
-    # La lógica para registrar vistas no cambia, solo el límite
     today = str(datetime.utcnow().date())
     uid = str(user_id)
     if uid not in user_daily_views:
@@ -302,6 +254,22 @@ def get_main_menu():
             ],
         ]
     )
+
+# --- Función auxiliar para generar botones de capítulos en cuadrícula ---
+def generate_chapter_buttons(serie_id, num_chapters, chapters_per_row=5):
+    buttons = []
+    row = []
+    for i in range(num_chapters):
+        row.append(InlineKeyboardButton(str(i + 1), callback_data=f"cap_{serie_id}_{i}"))
+        if len(row) == chapters_per_row:
+            buttons.append(row)
+            row = []
+    if row: # Añadir la última fila si no está completa
+        buttons.append(row)
+    
+    # Añadir botón "Volver al menú principal" al final
+    buttons.append([InlineKeyboardButton("🔙 Volver al menú principal", callback_data="menu_principal")])
+    return InlineKeyboardMarkup(buttons)
 
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,7 +375,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(
                 video=pkg["video_id"],
                 caption=title_caption,
-                protect_content=not can_resend_content(user_id) # Usar can_resend_content
+                protect_content=not can_resend_content(user_id)
             )
         else:
             await update.message.reply_text(
@@ -468,16 +436,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not capitulos:
             await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
             return
+        
+        # Usar la nueva función para generar los botones de los capítulos
+        markup = generate_chapter_buttons(serie_id, len(capitulos))
 
-        botones = []
-        for i in range(len(capitulos)):
-            botones.append(
-                [InlineKeyboardButton(f"▶️ Capítulo {i+1}", callback_data=f"cap_{serie_id}_{i}")]
-            )
         await update.message.reply_photo(
             photo=serie["photo_id"],
             caption=f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nSelecciona un capítulo:",
-            reply_markup=InlineKeyboardMarkup(botones),
+            reply_markup=markup,
             parse_mode="Markdown"
         )
     else:
@@ -635,7 +601,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_video(
                 video=pkg["video_id"],
                 caption=title_caption,
-                protect_content=not can_resend_content(user_id) # Usar can_resend_content
+                protect_content=not can_resend_content(user_id)
             )
             await query.message.delete() # Eliminar el mensaje anterior
         else:
@@ -646,8 +612,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
             )
 
-
-    # Modificado: Mostrar video capítulo con navegación (series)
+    # Mostrar video capítulo con navegación (series)
     elif data.startswith("cap_"):
         _, serie_id, index = data.split("_")
         index = int(index)
@@ -673,7 +638,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 botones.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"cap_{serie_id}_{index - 1}"))
             if index < total - 1:
                 botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{index + 1}"))
-            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_{serie_id}"))
+            
+            # Botón "Volver a la Serie" que regresará a la lista de capítulos
+            # Usamos el mismo callback que el `start` para series.
+            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_list_{serie_id}")) # Nuevo callback para listar capítulos
 
             markup = InlineKeyboardMarkup([botones])
 
@@ -684,7 +652,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 ),
                 reply_markup=markup,
-                # ELIMINADO: protect_content=not can_resend_content(user_id) # Este argumento no es válido para edit_message_media
             )
         else:
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
@@ -693,6 +660,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "💎 Por favor, considera comprar un plan para acceso ilimitado.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
             )
+    
+    # Nuevo callback para mostrar la lista de capítulos de una serie
+    elif data.startswith("serie_list_"):
+        serie_id = data.split("_")[2]
+        serie = series_data.get(serie_id)
+        if not serie:
+            await query.message.reply_text("❌ Serie no encontrada.")
+            return
+        
+        capitulos = serie.get("capitulos", [])
+        if not capitulos:
+            await query.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
+            return
+        
+        # Reutilizar la función para generar los botones de los capítulos
+        markup = generate_chapter_buttons(serie_id, len(capitulos))
+
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=serie["photo_id"],
+                caption=f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nSelecciona un capítulo:",
+                parse_mode="Markdown"
+            ),
+            reply_markup=markup,
+        )
 
 
 # --- Pagos ---
