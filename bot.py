@@ -259,7 +259,7 @@ def get_main_menu():
             ],
             [
                 InlineKeyboardButton("📽️ peliculas", url="https://t.me/+rvYUEq-c96kzODE0"),
-                InlineKeyboardButton("🎬 series", url="https://t.me/+qiFtv2EmV-xmNWFh"),
+                InlineKeyboardButton("🎬 series", url="https://t.me/+eYI6JZq72o4xNWFh"),
             ],
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
