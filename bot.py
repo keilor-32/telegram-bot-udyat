@@ -255,16 +255,16 @@ def get_main_menu():
             ],
             [
                 InlineKeyboardButton("💬 Chat Pedido", url="https://t.me/+6eA7AdRfgq81NzBh"),
-                InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
+                InlineKeyboardButton("📽️ doramas", url="https://t.me/+YIXdwQ9Sa-I3ODYx"),
             ],
             [
-                InlineKeyboardButton("📽️ peliculas", url="https://t.me/+dVTzx8dMGf81NTcx"),
-                ],
-            [
+                InlineKeyboardButton("📽️ peliculas", url="https://t.me/+rvYUEq-c96kzODE0"),
                 InlineKeyboardButton("🎬 series", url="https://t.me/+qiFtv2EmV-xmNWFh"),
             ],
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
+               ],
+            [
                 InlineKeyboardButton("🧑 Perfil", callback_data="perfil"),
             ],
             [
@@ -509,16 +509,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💎 *Planes disponibles:*\n\n"
             f"🔹 Free – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n"
             "🔸 *Plan Pro*\n"
-            "Precio: 40 estrellas\n"
+            "Precio: 25 estrellas\n"
             "Beneficios: 50 videos diarios, sin reenvíos ni compartir.\n\n"
             "🔸 *Plan Ultra*\n"
-            "Precio: 100 estrellas\n"
+            "Precio: 50 estrellas\n"
             "Beneficios: Videos y reenvíos ilimitados, sin restricciones.\n"
         )
         botones_planes = InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("💸 Comprar Plan Pro (40 ⭐)", callback_data="comprar_pro")],
-                [InlineKeyboardButton("💸 Comprar Plan Ultra (100 ⭐)", callback_data="comprar_ultra")],
+                [InlineKeyboardButton("💸 Comprar Plan Pro (25 ⭐)", callback_data="comprar_pro")],
+                [InlineKeyboardButton("💸 Comprar Plan Ultra (50 ⭐)", callback_data="comprar_ultra")],
                 [InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")],
             ]
         )
