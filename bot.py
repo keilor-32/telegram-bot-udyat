@@ -315,7 +315,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1']}"
                                     )
                                 ],
                                 [
@@ -370,7 +370,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1']"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1']}"
                                     )
                                 ],
                                 [
@@ -423,7 +423,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1']}"
                                     )
                                 ],
                                 [
@@ -471,7 +471,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
-                        InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}"),
+                        InlineKeyboardButton("🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1']}"),
                         InlineKeyboardButton("🔗 Unirse a canal 2", url=f"https://t.me/{CHANNELS['canal_2'][1:]}"),
                     ],
                     [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
