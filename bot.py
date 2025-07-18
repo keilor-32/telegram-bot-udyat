@@ -3,7 +3,7 @@ import json
 import tempfile
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # <-- ¡IMPORTANTE: Añadir timezone!
 from aiohttp import web
 from telegram import (
     Update,
@@ -11,7 +11,7 @@ from telegram import (
     InlineKeyboardMarkup,
     LabeledPrice,
     InputMediaVideo,
-    InputMediaPhoto, # Import InputMediaPhoto for sending photos with captions
+    InputMediaPhoto,
 )
 from telegram.ext import (
     Application,
@@ -55,7 +55,7 @@ if not APP_URL:
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__) # Use __name__ instead of name for logging
+logger = logging.getLogger(__name__)
 
 # --- Variables en memoria ---
 user_premium = {}          # {user_id: expire_at datetime}
@@ -79,7 +79,12 @@ def save_user_premium_firestore():
     batch = db.batch()
     for uid, exp in user_premium.items():
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
-        batch.set(doc_ref, {"expire_at": exp.isoformat()})
+        # Asegurarse de que la fecha se guarde con información de zona horaria si la tiene,
+        # o convertirla a UTC si es naive. Firestore prefiere ISO 8601.
+        if exp.tzinfo is None: # Si es naive, asumimos UTC
+            batch.set(doc_ref, {"expire_at": exp.replace(tzinfo=timezone.utc).isoformat()})
+        else: # Si ya es aware, la guardamos directamente
+            batch.set(doc_ref, {"expire_at": exp.isoformat()})
     batch.commit()
 
 def load_user_premium_firestore():
@@ -88,9 +93,15 @@ def load_user_premium_firestore():
     for doc in docs:
         data = doc.to_dict()
         try:
-            expire_at = datetime.fromisoformat(data.get("expire_at"))
-            result[int(doc.id)] = expire_at
-        except Exception:
+            expire_at_str = data.get("expire_at")
+            if expire_at_str:
+                expire_at = datetime.fromisoformat(expire_at_str)
+                # Si expire_at es naive después de fromisoformat, asumimos que es UTC
+                if expire_at.tzinfo is None:
+                    expire_at = expire_at.replace(tzinfo=timezone.utc)
+                result[int(doc.id)] = expire_at
+        except Exception as e:
+            logger.error(f"Error al cargar fecha premium para {doc.id}: {e}")
             pass
     return result
 
@@ -191,7 +202,8 @@ PLAN_ULTRA_ITEM = {
 
 # --- Control acceso ---
 def is_premium(user_id):
-    return user_id in user_premium and user_premium[user_id] > datetime.utcnow()
+    # Asegúrate de que ambas fechas sean 'offset-aware' y en UTC
+    return user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc)
 
 def can_view_video(user_id):
     if is_premium(user_id):
@@ -392,7 +404,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Precio: 40 estrellas\n"
             "Beneficios: 50 videos diarios, sin reenvíos ni compartir.\n\n"
             "🔸 *Plan Ultra*\n"
-            "Precio: 100 estrellas\n" # Ensure this price matches the PLAN_ULTRA_ITEM
+            "Precio: 100 estrellas\n"
             "Beneficios: Videos y reenvíos ilimitados, sin restricciones.\n"
         )
         botones_planes = InlineKeyboardMarkup(
@@ -471,7 +483,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton(f"▶️ Ver Capítulo {i+1}", callback_data=f"cap_{serie_id}_{temporada}_{i}")]
             )
         # Add a "Volver" button to go back to the series overview
-        botones.append([InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_{serie_id}")]) # Corrected callback to return to series info
+        botones.append([InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_{serie_id}")])
         await query.edit_message_text(f"📺 Capítulos de Temporada {temporada[1:]}:", reply_markup=InlineKeyboardMarkup(botones))
 
     # NUEVO: Mostrar video capítulo con navegación
@@ -519,7 +531,8 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
     if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
-        expire_at = datetime.utcnow() + timedelta(days=30)
+        # Asegúrate de que la fecha de expiración sea aware (UTC)
+        expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = expire_at
         save_data()
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
@@ -570,10 +583,11 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     for chat_id in known_chats:
         try:
+            # Enviar la foto con la sinopsis y el botón
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=photo_id,
-                caption=caption, # Use the caption for the photo
+                caption=caption, # Usa la sinopsis como caption de la foto
                 reply_markup=boton,
                 protect_content=True,
             )
@@ -795,5 +809,5 @@ async def main():
         await app_telegram.shutdown()
         await runner.cleanup()
 
-if __name__ == "__main__": # Corrected if __name__ == "main": to use __name__
+if __name__ == "__main__":
     asyncio.run(main())
