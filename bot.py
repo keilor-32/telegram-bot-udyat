@@ -58,7 +58,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Variables en memoria ---
-user_premium = {}          # {user_id: expire_at datetime}
+# MODIFICADO: Ahora user_premium guarda un diccionario {expire_at: datetime, plan_type: str}
+user_premium = {}          # {user_id: {expire_at: datetime, plan_type: str}}
 user_daily_views = {}      # {user_id: {date: count}}
 content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
@@ -76,12 +77,13 @@ COLLECTION_SERIES = "series_data"
 # --- Funciones Firestore (Síncronas) ---
 def save_user_premium_firestore():
     batch = db.batch()
-    for uid, exp in user_premium.items():
+    for uid, data in user_premium.items(): # MODIFICADO: 'data' ahora es un dict
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
+        exp = data["expire_at"]
         if exp.tzinfo is None:
-            batch.set(doc_ref, {"expire_at": exp.replace(tzinfo=timezone.utc).isoformat()})
+            batch.set(doc_ref, {"expire_at": exp.replace(tzinfo=timezone.utc).isoformat(), "plan_type": data["plan_type"]}) # MODIFICADO: Guardar plan_type
         else:
-            batch.set(doc_ref, {"expire_at": exp.isoformat()})
+            batch.set(doc_ref, {"expire_at": exp.isoformat(), "plan_type": data["plan_type"]}) # MODIFICADO: Guardar plan_type
     batch.commit()
 
 def load_user_premium_firestore():
@@ -91,11 +93,12 @@ def load_user_premium_firestore():
         data = doc.to_dict()
         try:
             expire_at_str = data.get("expire_at")
+            plan_type = data.get("plan_type", "premium_legacy") # MODIFICADO: Cargar plan_type, default para compatibilidad
             if expire_at_str:
                 expire_at = datetime.fromisoformat(expire_at_str)
                 if expire_at.tzinfo is None:
                     expire_at = expire_at.replace(tzinfo=timezone.utc)
-                result[int(doc.id)] = expire_at
+                result[int(doc.id)] = {"expire_at": expire_at, "plan_type": plan_type} # MODIFICADO: Guardar como dict
         except Exception as e:
             logger.error(f"Error al cargar fecha premium para {doc.id}: {e}")
             pass
@@ -174,45 +177,59 @@ def load_data():
 # --- Planes ---
 FREE_LIMIT_VIDEOS = 3
 PRO_LIMIT_VIDEOS = 50
-PREMIUM_ITEM = {
-    "title": "Plan Premium",
-    "description": "Acceso y reenvíos ilimitados por 30 días.",
-    "payload": "premium_plan",
-    "currency": "XTR",
-    "prices": [LabeledPrice("Premium por 30 días", 1)],
-}
 PLAN_PRO_ITEM = {
     "title": "Plan Pro",
     "description": "50 videos diarios, sin reenvíos ni compartir.",
-    "payload": "plan_pro",
+    "payload": "plan_pro", # Usado como plan_type
     "currency": "XTR",
     "prices": [LabeledPrice("Plan Pro por 30 días", 40)],
 }
 PLAN_ULTRA_ITEM = {
     "title": "Plan Ultra",
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
-    "payload": "plan_ultra",
+    "payload": "plan_ultra", # Usado como plan_type
     "currency": "XTR",
     "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
 }
 
-# --- Control acceso ---
+# --- Control acceso (MODIFICADO) ---
 def is_premium(user_id):
-    return user_id in user_premium and user_premium[user_id] > datetime.now(timezone.utc)
+    # Verifica si el usuario tiene CUALQUIER plan pago activo.
+    if user_id in user_premium:
+        user_plan_data = user_premium[user_id]
+        if isinstance(user_plan_data, dict) and "expire_at" in user_plan_data:
+            return user_plan_data["expire_at"] > datetime.now(timezone.utc)
+        # Compatibilidad con versiones antiguas donde user_premium[user_id] era solo la fecha
+        elif isinstance(user_plan_data, datetime):
+            return user_plan_data > datetime.now(timezone.utc)
+    return False
+
+def get_user_plan_type(user_id):
+    # Obtiene el tipo de plan actual del usuario.
+    if is_premium(user_id):
+        user_plan_data = user_premium[user_id]
+        if isinstance(user_plan_data, dict) and "plan_type" in user_plan_data:
+            return user_plan_data["plan_type"]
+        # Compatibilidad: si es premium pero no tiene 'plan_type', asumir "premium_legacy" o "ultra"
+        return "plan_ultra" # Asumir Ultra para planes antiguos sin tipo explícito
+    return "free"
 
 def can_resend_content(user_id):
-    return is_premium(user_id)
+    # SOLO el plan "ultra" (o "premium_legacy" para compatibilidad) permite reenviar.
+    plan_type = get_user_plan_type(user_id)
+    return plan_type == "plan_ultra" or plan_type == "premium_legacy"
 
 def can_view_video(user_id):
-    if is_premium(user_id):
-        # Asumiendo que 'is_premium' True significa Plan Ultra (vistas ilimitadas)
-        # Si se necesita diferenciar PRO/ULTRA, se debe guardar el tipo de plan en Firestore
-        return True
-    
-    # Si no es premium, es Free.
+    plan_type = get_user_plan_type(user_id)
     today = str(datetime.utcnow().date())
     current_views = user_daily_views.get(str(user_id), {}).get(today, 0)
-    return current_views < FREE_LIMIT_VIDEOS
+
+    if plan_type == "plan_ultra" or plan_type == "premium_legacy":
+        return True # Vistas ilimitadas
+    elif plan_type == "plan_pro":
+        return current_views < PRO_LIMIT_VIDEOS
+    else: # plan_type == "free"
+        return current_views < FREE_LIMIT_VIDEOS
 
 async def register_view(user_id):
     today = str(datetime.utcnow().date())
@@ -507,8 +524,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_pro":
         if is_premium(user_id):
-            exp = user_premium[user_id].strftime("%Y-%m-%d")
-            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
+            exp_date = user_premium[user_id].get("expire_at", datetime.now(timezone.utc)).strftime("%Y-%m-%d") # MODIFICADO
+            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp_date}.")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -523,8 +540,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_ultra":
         if is_premium(user_id):
-            exp = user_premium[user_id].strftime("%Y-%m-%d")
-            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp}.")
+            exp_date = user_premium[user_id].get("expire_at", datetime.now(timezone.utc)).strftime("%Y-%m-%d") # MODIFICADO
+            await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp_date}.")
             return
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
@@ -538,11 +555,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "perfil":
-        plan = "Premium" if is_premium(user_id) else "Free"
-        exp = user_premium.get(user_id)
+        plan_type = get_user_plan_type(user_id)
+        exp_date_str = "N/A"
+        if is_premium(user_id):
+            exp_date = user_premium[user_id].get("expire_at")
+            if exp_date:
+                exp_date_str = exp_date.strftime('%Y-%m-%d')
+
         await query.message.reply_text(
             f"🧑 Perfil:\n• {user.full_name}\n• @{user.username or 'Sin usuario'}\n"
-            f"• ID: {user_id}\n• Plan: {plan}\n• Expira: {exp.strftime('%Y-%m-%d') if exp else 'N/A'}",
+            f"• ID: {user_id}\n• Plan: {plan_type.replace('plan_', '').capitalize()}\n• Expira: {exp_date_str}", # MODIFICADO: Mostrar tipo de plan
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]),
         )
 
@@ -640,7 +662,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{index + 1}"))
             
             # Botón "Volver a la Serie" que regresará a la lista de capítulos
-            # Usamos el mismo callback que el `start` para series.
             botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_list_{serie_id}")) # Nuevo callback para listar capítulos
 
             markup = InlineKeyboardMarkup([botones])
@@ -669,6 +690,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Serie no encontrada.")
             return
         
+        # APLICACIÓN DE LA SEGURIDAD PARA SERIES AQUÍ (al volver a la lista)
+        if not can_view_video(user_id): # Verifica si tiene vistas disponibles
+            await query.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} vistas para series/videos.\n"
+                "💎 Por favor, considera comprar un plan para acceso ilimitado.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
+            return
+
         capitulos = serie.get("capitulos", [])
         if not capitulos:
             await query.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
@@ -694,16 +724,24 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
-    if payload in [PREMIUM_ITEM["payload"], PLAN_PRO_ITEM["payload"], PLAN_ULTRA_ITEM["payload"]]:
+    # MODIFICADO: Guardar el tipo de plan junto con la fecha de expiración
+    if payload == PLAN_PRO_ITEM["payload"]:
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
-        user_premium[user_id] = expire_at
-        
-        # IMPORTANTE: Guardar el tipo de plan para diferenciar PRO/ULTRA en 'can_view_video' y 'can_resend_content'
-        # Esto requeriría añadir un campo 'plan_type' al documento del usuario en Firestore.
-        # Por ejemplo: db.collection(COLLECTION_USERS).document(str(user_id)).update({"plan_type": payload})
-        
-        save_data()
-        await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu plan se activó por 30 días.")
+        user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_pro"}
+        await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Pro* se activó por 30 días.")
+    elif payload == PLAN_ULTRA_ITEM["payload"]:
+        expire_at = datetime.now(timezone.utc) + timedelta(days=30)
+        user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
+        await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
+    # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo también.
+    # Ejemplo de manejo para el viejo "premium_plan" si aún lo usas:
+    # elif payload == PREMIUM_ITEM["payload"]:
+    #     expire_at = datetime.now(timezone.utc) + timedelta(days=30)
+    #     user_premium[user_id] = {"expire_at": expire_at, "plan_type": "premium_legacy"}
+    #     await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Premium* se activó por 30 días.")
+    
+    save_data()
+
 
 # --- Recepción contenido (sinopsis + video) ---
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
