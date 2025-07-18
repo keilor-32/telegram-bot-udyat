@@ -59,12 +59,12 @@ logger = logging.getLogger(__name__)
 
 # --- Variables en memoria ---
 # MODIFICADO: Ahora user_premium guarda un diccionario {expire_at: datetime, plan_type: str}
-user_premium = {}           # {user_id: {expire_at: datetime, plan_type: str}}
+user_premium = {}          # {user_id: {expire_at: datetime, plan_type: str}}
 user_daily_views = {}      # {user_id: {date: count}}
 content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
 current_photo = {}
-series_data = {}            # {serie_id: {"title", "photo_id", "caption", "capitulos": [video_id, ...], ...}}
+series_data = {}           # {serie_id: {"title", "photo_id", "caption", "capitulos": [video_id, ...], ...}}
 current_series = {}        # {user_id: {"title", "photo_id", "caption", "serie_id", "capitulos": []}}
 
 # --- Firestore colecciones ---
@@ -370,7 +370,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1'][1:]}" # CORREGIDO
+                                        "🔗 Unirse a canal 1", url=f"https://t.me/{CHANNELS['canal_1']"
                                     )
                                 ],
                                 [
@@ -735,301 +735,243 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
-    save_data() # Guardar los cambios en Firestore
-
-# --- Funciones de administración (solo para el propietario del bot) ---
-ADMIN_IDS = [int(os.getenv("ADMIN_ID"))] if os.getenv("ADMIN_ID") else []
-
-async def setvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 No tienes permisos para usar este comando.")
-        return
-
-    if not update.message.reply_to_message or not update.message.reply_to_message.video:
-        await update.message.reply_text("Por favor, responde a un video con este comando para guardarlo.")
-        return
-
-    video_id = update.message.reply_to_message.video.file_id
-    caption = update.message.reply_to_message.caption or ""
-    pkg_id = context.args[0] if context.args else f"video_{video_id[:8]}" # Generar un ID único si no se proporciona
-
-    content_packages[pkg_id] = {"video_id": video_id, "caption": caption}
+    # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo también.
+    # Ejemplo de manejo para el viejo "premium_plan" si aún lo usas:
+    # elif payload == PREMIUM_ITEM["payload"]:
+    #     expire_at = datetime.now(timezone.utc) + timedelta(days=30)
+    #     user_premium[user_id] = {"expire_at": expire_at, "plan_type": "premium_legacy"}
+    #     await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Premium* se activó por 30 días.")
+    
     save_data()
-    await update.message.reply_text(
-        f"✅ Video guardado con ID: `{pkg_id}`\n"
-        f"Comparte este enlace: `https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}`",
-        parse_mode="Markdown"
+
+
+# --- Recepción contenido (sinopsis + video) ---
+async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    user_id = msg.from_user.id
+    if msg.photo and msg.caption:
+        current_photo[user_id] = {
+            "photo_id": msg.photo[-1].file_id,
+            "caption": msg.caption,
+        }
+        await msg.reply_text("✅ Sinopsis recibida. Ahora envía el video o usa /crear_serie para series.")
+    else:
+        await msg.reply_text("❌ Envía una imagen con sinopsis.")
+
+async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    user_id = msg.from_user.id
+    bot_username = (await context.bot.get_me()).username
+
+    if user_id not in current_photo:
+        await msg.reply_text("❌ Primero envía una sinopsis con imagen.")
+        return
+
+    pkg_id = str(int(datetime.utcnow().timestamp()))
+    photo_id = current_photo[user_id]["photo_id"]
+    caption = current_photo[user_id]["caption"]
+    video_id = msg.video.file_id
+
+    content_packages[pkg_id] = {
+        "photo_id": photo_id,
+        "caption": caption,
+        "video_id": video_id,
+    }
+    del current_photo[user_id]
+
+    save_data()
+
+    boton_ver_contenido_en_privado = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "▶️ Ver Contenido", url=f"https://t.me/{bot_username}?start=video_{pkg_id}"
+                )
+            ]
+        ]
     )
-
-async def setserie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 No tienes permisos para usar este comando.")
-        return
-
-    if not update.message.reply_to_message or not update.message.reply_to_message.photo:
-        await update.message.reply_text("Para configurar una serie, responde a una imagen que será la portada de la serie. Luego, sigue con los siguientes pasos.")
-        current_photo[user_id] = None # Reset
-        return
-
-    # Paso 1: Obtener la foto y pedir el título/descripción
-    photo_id = update.message.reply_to_message.photo[-1].file_id
-    current_photo[user_id] = photo_id
-    await update.message.reply_text("✅ Portada de la serie recibida. Ahora, envía el título y una descripción corta para la serie.")
-
-    # Guardar el estado para el siguiente paso
-    context.user_data['waiting_for_serie_info'] = True
-    context.user_data['serie_photo_id'] = photo_id
-
-async def handle_serie_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS or not context.user_data.get('waiting_for_serie_info'):
-        return
-
-    # Paso 2: Recibir título y descripción
-    if update.message.text:
-        title_description = update.message.text
-        # Asumiendo que la primera línea es el título y el resto es la descripción
-        lines = title_description.split('\n', 1)
-        title = lines[0].strip()
-        caption = lines[1].strip() if len(lines) > 1 else ""
-
-        serie_id = f"serie_{title.replace(' ', '_').lower()[:10]}_{datetime.now().strftime('%f')}" # Generar un ID único
-
-        series_data[serie_id] = {
-            "title": title,
-            "photo_id": context.user_data['serie_photo_id'],
-            "caption": caption,
-            "capitulos": []
-        }
-        current_series[user_id] = { # Almacenar la serie actual para añadir capítulos
-            "serie_id": serie_id,
-            "title": title,
-            "photo_id": context.user_data['serie_photo_id'],
-            "caption": caption,
-            "capitulos": [] # Inicialmente vacía, se llenará con addcap
-        }
-        save_data()
-
-        await update.message.reply_text(
-            f"✅ Serie '{title}' creada. Ahora puedes añadir capítulos respondiendo a un video con `/addcap`."
-            f"\n\nComparte este enlace a la serie: `https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}`",
-            parse_mode="Markdown"
-        )
-        del context.user_data['waiting_for_serie_info']
-        del context.user_data['serie_photo_id']
-    else:
-        await update.message.reply_text("Por favor, envía el título y la descripción como texto.")
-
-
-async def addcap(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 No tienes permisos para usar este comando.")
-        return
-
-    if not update.message.reply_to_message or not update.message.reply_to_message.video:
-        await update.message.reply_text("Por favor, responde a un video para añadirlo como capítulo.")
-        return
-
-    if not current_series.get(user_id):
-        await update.message.reply_text("Primero debes crear o seleccionar una serie para añadirle capítulos. Usa /setserie.")
-        return
-
-    serie_id = current_series[user_id]["serie_id"]
-    video_id = update.message.reply_to_message.video.file_id
-
-    if serie_id in series_data:
-        series_data[serie_id]["capitulos"].append(video_id)
-        current_series[user_id]["capitulos"].append(video_id) # Actualizar también en memoria temporal
-        save_data()
-        await update.message.reply_text(
-            f"✅ Capítulo añadido a la serie '{series_data[serie_id]['title']}'. Total de capítulos: {len(series_data[serie_id]['capitulos'])}"
-        )
-    else:
-        await update.message.reply_text("❌ No se encontró la serie actual. Por favor, reinicia el proceso con /setserie.")
-
-
-async def listseries(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 No tienes permisos para usar este comando.")
-        return
-
-    if not series_data:
-        await update.message.reply_text("No hay series guardadas.")
-        return
-
-    message_text = "📺 *Series Guardadas:*\n\n"
-    for serie_id, serie in series_data.items():
-        message_text += (
-            f"• *{serie['title']}* (`{serie_id}`)\n"
-            f"  Capítulos: {len(serie.get('capitulos', []))}\n"
-            f"  Enlace: `https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}`\n\n"
-        )
-    await update.message.reply_text(message_text, parse_mode="Markdown")
-
-async def deletemedia(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 No tienes permisos para usar este comando.")
-        return
-
-    if not context.args:
-        await update.message.reply_text("Uso: /deletemedia <ID_del_video_o_serie_o_capítulo>")
-        return
-
-    target_id = context.args[0]
-
-    # Intentar borrar de videos individuales
-    if target_id in content_packages:
-        del content_packages[target_id]
-        save_data()
-        await update.message.reply_text(f"✅ Video individual con ID `{target_id}` eliminado.")
-        return
-
-    # Intentar borrar una serie completa
-    if target_id in series_data:
-        del series_data[target_id]
-        save_data()
-        await update.message.reply_text(f"✅ Serie con ID `{target_id}` eliminada.")
-        return
-
-    # Intentar borrar un capítulo específico de una serie (formato: serieID_cap_INDEX)
-    if '_' in target_id and 'cap_' in target_id:
-        parts = target_id.split('_')
-        if len(parts) == 3 and parts[1] == 'cap':
-            serie_id = parts[0]
-            try:
-                cap_index = int(parts[2])
-                if serie_id in series_data and 0 <= cap_index < len(series_data[serie_id].get("capitulos", [])):
-                    del series_data[serie_id]["capitulos"][cap_index]
-                    save_data()
-                    await update.message.reply_text(f"✅ Capítulo {cap_index+1} de la serie `{serie_id}` eliminado.")
-                    return
-            except ValueError:
-                pass # No es un índice válido
-
-    await update.message.reply_text(f"❌ No se encontró contenido (video, serie o capítulo) con el ID: `{target_id}`.")
-
-
-async def listusers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 No tienes permisos para usar este comando.")
-        return
-    
-    if not user_premium:
-        await update.message.reply_text("No hay usuarios premium registrados.")
-        return
-
-    response = "👥 *Usuarios Premium:*\n\n"
-    for uid, data in user_premium.items():
-        expire_at_str = data["expire_at"].strftime('%Y-%m-%d %H:%M:%S')
-        plan_type = data.get("plan_type", "premium_legacy")
-        response += f"• ID: `{uid}` - Plan: `{plan_type.replace('plan_', '').capitalize()}` - Expira: `{expire_at_str}`\n"
-    
-    await update.message.reply_text(response, parse_mode="Markdown")
-
-async def send_daily_reminder(application: Application):
-    logger.info("Enviando recordatorios diarios a chats conocidos...")
-    for chat_id in list(known_chats): # Usar list() para evitar RuntimeError por set modificado durante iteración
+    for chat_id in known_chats:
         try:
-            await application.bot.send_message(
+            await context.bot.send_photo(
                 chat_id=chat_id,
-                text="👋 ¡Hola! No olvides revisar nuestro contenido nuevo hoy. ¡Tenemos muchas películas y series para ti!"
+                photo=photo_id,
+                caption=caption,
+                reply_markup=boton_ver_contenido_en_privado,
+                protect_content=True, # Siempre protege en el grupo
             )
-            logger.info(f"Recordatorio enviado a chat: {chat_id}")
         except Exception as e:
-            logger.error(f"Error enviando recordatorio a chat {chat_id}: {e}")
-            # Si el chat da error (ej. bot bloqueado), lo removemos
-            known_chats.discard(chat_id)
-            save_data() # Guardar el set actualizado
+            logger.warning(f"No se pudo enviar a {chat_id}: {e}")
 
-async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    current_plan = get_user_plan_type(user_id)
-    
-    if current_plan == "free":
-        daily_limit = FREE_LIMIT_VIDEOS
-    elif current_plan == "plan_pro":
-        daily_limit = PRO_LIMIT_VIDEOS
-    else: # plan_ultra o premium_legacy
-        daily_limit = "ilimitado"
+    await msg.reply_text("✅ Contenido enviado a los grupos.")
 
-    today = str(datetime.utcnow().date())
-    views_today = user_daily_views.get(str(user_id), {}).get(today, 0)
-    
-    # Calcular tiempo restante si es premium
-    premium_status = "No activo"
-    if is_premium(user_id):
-        expire_at = user_premium[user_id]["expire_at"]
-        now_utc = datetime.now(timezone.utc)
-        if expire_at > now_utc:
-            remaining_time = expire_at - now_utc
-            days = remaining_time.days
-            hours, remainder = divmod(remaining_time.seconds, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            premium_status = f"Activo ({days}d {hours}h {minutes}m restantes)"
-        else:
-            premium_status = "Expirado" # Debería ser capturado por is_premium, pero para mayor claridad
-
-    info_message = (
-        f"ℹ️ *Información de Uso:*\n\n"
-        f"• Tu plan actual: *{current_plan.replace('plan_', '').capitalize()}*\n"
-        f"• Vistas diarias restantes: *{daily_limit - views_today if isinstance(daily_limit, int) else 'Ilimitado'}*\n"
-        f"• Estado Premium: *{premium_status}*\n\n"
-        "Puedes ver tu límite de videos en la sección de planes."
+# --- Comandos para series (simplificado) ---
+async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para iniciar creación de serie (sinopsis + foto)."""
+    user_id = update.message.from_user.id
+    if user_id not in current_photo:
+        await update.message.reply_text("❌ Primero envía la sinopsis con imagen.")
+        return
+    serie_id = str(int(datetime.utcnow().timestamp()))
+    data = current_photo[user_id]
+    current_series[user_id] = {
+        "serie_id": serie_id,
+        "title": data["caption"].split("\n")[0],
+        "photo_id": data["photo_id"],
+        "caption": data["caption"],
+        "capitulos": [],
+    }
+    del current_photo[user_id]
+    await update.message.reply_text(
+        "✅ Serie creada temporalmente.\n"
+        "Ahora envía el primer video para el capítulo 1 usando /agregar_capitulo."
     )
+
+async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para agregar capítulo a la serie actual."""
+    user_id = update.message.from_user.id
+    if user_id not in current_series:
+        await update.message.reply_text("❌ No hay serie en creación. Usa /crear_serie primero.")
+        return
     
-    await update.message.reply_text(info_message, parse_mode="Markdown")
+    await update.message.reply_text(
+        "📽️ Por favor envía ahora el video para el capítulo de la serie."
+    )
 
+async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Para recibir video y asignarlo como capítulo si el usuario está en proceso de agregar capítulo a serie."""
+    msg = update.message
+    user_id = msg.from_user.id
+    if user_id not in current_series:
+        # Si no está creando una serie, se trata como un video regular
+        await recibir_video(update, context)
+        return
 
-async def main() -> None:
+    if not msg.video:
+        await msg.reply_text("❌ Envía un video válido para el capítulo.")
+        return
+
+    serie = current_series[user_id]
+    video_id = msg.video.file_id
+    serie["capitulos"].append(video_id)
+
+    await msg.reply_text(f"✅ Capítulo {len(serie['capitulos'])} agregado a la serie. Usa /finalizar_serie para guardar la serie o envía otro video para añadir el siguiente capítulo.")
+
+async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Finaliza y guarda la serie creada en Firestore y memoria."""
+    user_id = update.message.from_user.id
+    if user_id not in current_series:
+        await update.message.reply_text("❌ No hay serie en creación.")
+        return
+    serie = current_series[user_id]
+    serie_id = serie["serie_id"]
+    
+    series_data[serie_id] = {
+        "title": serie["title"],
+        "photo_id": serie["photo_id"],
+        "caption": serie["caption"],
+        "capitulos": serie["capitulos"],
+    }
+    save_data()
+    del current_series[user_id]
+
+    # Enviar a grupos la portada con botón "Ver Serie"
+    bot_username = (await context.bot.get_me()).username
+    boton = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "▶️ Ver Serie",
+                    url=f"https://t.me/{bot_username}?start=serie_{serie_id}",
+                )
+            ]
+        ]
+    )
+    for chat_id in known_chats:
+        try:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=serie["photo_id"],
+                caption=serie["caption"],
+                reply_markup=boton,
+                protect_content=True, # Siempre protege la publicación en el grupo
+            )
+        except Exception as e:
+            logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
+
+    await update.message.reply_text("✅ Serie guardada y enviada a los grupos.")
+
+async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type in ["group", "supergroup"]:
+        if chat.id not in known_chats:
+            known_chats.add(chat.id)
+            save_data()
+            logger.info(f"Grupo registrado: {chat.id}")
+
+# --- WEBHOOK aiohttp ---
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, app_telegram.bot)
+    await app_telegram.update_queue.put(update)
+    return web.Response(text="OK")
+
+async def on_startup(app):
+    webhook_url = f"{APP_URL}/webhook"
+    await app_telegram.bot.set_webhook(webhook_url)
+    logger.info(f"Webhook configurado en {webhook_url}")
+
+async def on_shutdown(app):
+    await app_telegram.bot.delete_webhook()
+    logger.info("Webhook eliminado")
+
+# --- App Telegram ---
+app_telegram = Application.builder().token(TOKEN).build()
+
+# Agregar handlers
+app_telegram.add_handler(CommandHandler("start", start))
+app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
+app_telegram.add_handler(CallbackQueryHandler(handle_callback, pattern="^play_video_.*$"))
+app_telegram.add_handler(CallbackQueryHandler(handle_callback))
+app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
+app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
+
+# Comandos para series
+app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
+app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
+app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
+
+# --- Servidor aiohttp ---
+web_app = web.Application()
+web_app.router.add_post("/webhook", webhook_handler)
+web_app.router.add_get("/ping", lambda request: web.Response(text="✅ Bot activo."))
+web_app.on_startup.append(on_startup)
+web_app.on_shutdown.append(on_shutdown)
+
+async def main():
     load_data()
-    logger.info("Datos cargados al inicio.")
+    logger.info("🤖 Bot iniciado con webhook")
 
-    application = Application.builder().token(TOKEN).build()
+    await app_telegram.initialize()
+    await app_telegram.start()
 
-    # Añadir job para recordatorios diarios
-    # application.job_queue.run_daily(send_daily_reminder, time=datetime.min.time(), days=(0, 1, 2, 3, 4, 5, 6)) # Ejecutar a medianoche UTC
-    # Para probar más rápido, puedes usar run_repeating
-    # application.job_queue.run_repeating(send_daily_reminder, interval=3600, first=0) # Cada hora
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-    application.add_handler(MessageHandler(filters.SuccessfulPayment(), successful_payment))
-
-    # Comandos de administración
-    application.add_handler(CommandHandler("setvideo", setvideo))
-    application.add_handler(CommandHandler("setserie", setserie))
-    application.add_handler(CommandHandler("addcap", addcap))
-    application.add_handler(CommandHandler("listseries", listseries))
-    application.add_handler(CommandHandler("deletemedia", deletemedia))
-    application.add_handler(CommandHandler("listusers", listusers))
-    application.add_handler(CommandHandler("info", info_command))
-    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE & filters.User(ADMIN_IDS) & (lambda msg: msg.from_user.id in current_photo and current_photo[msg.from_user.id] is not None), handle_serie_info))
-
-
-    # Webhook setup
-    await application.bot.set_webhook(url=APP_URL)
-    webhook_server = web.Application()
-    webhook_server.router.add_post(f"/{TOKEN}", lambda request: web.Response(status=200) if asyncio.create_task(application.update_queue.put(Update.de_json(json.loads(request.text), application.bot))) else web.Response(status=200))
-
-    runner = web.AppRunner(webhook_server)
+    runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
+    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
 
-    # Keep the application running indefinitely
-    await asyncio.Event().wait()
-
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("🛑 Deteniendo bot...")
+    finally:
+        await app_telegram.stop()
+        await app_telegram.shutdown()
+        await runner.cleanup()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.exception(f"Error fatal en la aplicación: {e}")
+    asyncio.run(main())
