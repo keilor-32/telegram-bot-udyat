@@ -63,17 +63,15 @@ user_daily_views = {}      # {user_id: {date: count}}
 content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
 known_chats = set()
 current_photo = {}
-# NUEVO: series con temporadas y capítulos
-# series_data ahora espera que "temporadas" contenga directamente una lista de capítulos, o una única temporada "T1"
 series_data = {}           # {serie_id: {"title", "photo_id", "caption", "capitulos": [video_id, ...], ...}}
-current_series = {}        # {user_id: {"title", "photo_id", "caption", "serie_id", "capitulos": []}} # Simplificado
+current_series = {}        # {user_id: {"title", "photo_id", "caption", "serie_id", "capitulos": []}}
 
 # --- Firestore colecciones ---
 COLLECTION_USERS = "users_premium"
 COLLECTION_VIDEOS = "videos"
 COLLECTION_VIEWS = "user_daily_views"
 COLLECTION_CHATS = "known_chats"
-COLLECTION_SERIES = "series_data"   # NUEVO para series
+COLLECTION_SERIES = "series_data"
 
 # --- Funciones Firestore (Síncronas) ---
 def save_user_premium_firestore():
@@ -143,7 +141,6 @@ def load_known_chats_firestore():
         return set(data.get("chat_ids", []))
     return set()
 
-# NUEVO: Guardar y cargar series (simplificado)
 def save_series_firestore():
     batch = db.batch()
     for serie_id, serie in series_data.items():
@@ -253,16 +250,17 @@ def get_main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user_id = update.effective_user.id
+    bot_username = (await context.bot.get_me()).username
 
-    # Handler para videos individuales con botón "Ver Contenido"
+    # NUEVO: Manejo del start link para mostrar sinopsis + botón "Ver Video"
     if args and args[0].startswith("video_"):
         pkg_id = args[0].split("_")[1]
         pkg = content_packages.get(pkg_id)
-        if not pkg or "video_id" not in pkg:
-            await update.message.reply_text("❌ Video no disponible.")
+        if not pkg:
+            await update.message.reply_text("❌ Contenido no disponible.")
             return
 
-        # Verifica suscripción a canales (se mantiene)
+        # Verifica suscripción a canales antes de mostrar la sinopsis con el botón "Ver Video"
         for name, username in CHANNELS.items():
             try:
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
@@ -291,11 +289,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
                 return
 
+        # Mostrar sinopsis y botón "Ver Video"
+        ver_video_button = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "▶️ Ver Video", callback_data=f"play_video_{pkg_id}" # Callback para cargar el video
+                    )
+                ]
+            ]
+        )
+        await update.message.reply_text(
+            f"🎬 **{pkg.get('caption', 'Contenido:')}**\n\nPresiona 'Ver Video' para iniciar la reproducción.",
+            reply_markup=ver_video_button,
+            parse_mode="Markdown"
+        )
+        return # Importante para evitar que continúe al siguiente elif o else
+
+    # NUEVO: Manejo del start link para reproducir video
+    elif args and args[0].startswith("play_video_"):
+        pkg_id = args[0].split("_")[2] # Extrae el ID del paquete de video
+        pkg = content_packages.get(pkg_id)
+        if not pkg or "video_id" not in pkg:
+            await update.message.reply_text("❌ Video no disponible.")
+            return
+
+        # La verificación de canales ya se hizo en el paso 'video_' anterior,
+        # pero para mayor seguridad o si el usuario llegó directamente aquí, se puede repetir.
+        # Aquí asumimos que si llega a "play_video_", ya pasó la verificación inicial
+        # o se le enviará un mensaje si no.
+
         if can_view_video(user_id):
             await register_view(user_id)
+            title_caption = pkg.get("caption", "🎬 Aquí tienes el video completo.")
             await update.message.reply_video(
                 video=pkg["video_id"],
-                caption=pkg.get("caption", "🎬 Aquí tienes el video completo."),
+                caption=title_caption,
                 protect_content=not is_premium(user_id)
             )
         else:
@@ -306,7 +335,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # NUEVO: manejo de argumentos para series (directo a capítulos)
+    # Manejo de argumentos para series (directo a capítulos)
     elif args and args[0].startswith("serie_"):
         serie_id = args[0].split("_", 1)[1]
         serie = series_data.get(serie_id)
@@ -344,19 +373,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
         # Mostrar capítulos directamente
-        capitulos = serie.get("capitulos", []) # Asumimos que los capítulos están directamente aquí
+        capitulos = serie.get("capitulos", [])
         if not capitulos:
             await update.message.reply_text("❌ Esta serie no tiene capítulos disponibles aún.")
             return
 
         botones = []
         for i in range(len(capitulos)):
-            # Usar 'cap' para capítulos de series, el formato incluye serie_id para volver a la serie
             botones.append(
-                [InlineKeyboardButton(f"▶️ Capítulo {i+1}", callback_data=f"cap_{serie_id}_0_{i}")] # 0 es un placeholder para temporada_indice
+                [InlineKeyboardButton(f"▶️ Capítulo {i+1}", callback_data=f"cap_{serie_id}_{i}")] # Removido el '0' placeholder
             )
-        # Puedes añadir un botón para volver al menú principal si lo deseas
-        # botones.append([InlineKeyboardButton("🔙 Menú Principal", callback_data="menu_principal")])
         await update.message.reply_photo(
             photo=serie["photo_id"],
             caption=f"📺 *{serie['title']}*\n\n{serie['caption']}\n\nSelecciona un capítulo:",
@@ -475,19 +501,70 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cursos":
         await query.message.reply_text("🎓 Aquí estarán los cursos disponibles.")
 
-    # REMOVIDO: Lógica para mostrar temporadas, ahora los capítulos son directos.
-    # elif data.startswith("ver_"): # Este bloque ya no es necesario con la nueva lógica
-    #     # ... (código anterior para mostrar temporadas) ...
+    # NUEVO: Manejo del callback para reproducir el video individual
+    elif data.startswith("play_video_"):
+        pkg_id = data.split("_")[2] # Extrae el ID del paquete de video
+        pkg = content_packages.get(pkg_id)
+        if not pkg or "video_id" not in pkg:
+            await query.message.reply_text("❌ Video no disponible.")
+            return
+
+        # Verificación de seguridad (similar a 'start' handler)
+        # Esto es importante si el usuario puede llegar a este callback directamente sin pasar por el '/start' link inicial
+        for name, username in CHANNELS.items():
+            try:
+                member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
+                if member.status not in ["member", "administrator", "creator"]:
+                    await query.message.reply_text(
+                        "🔒 Para ver este contenido debes unirte a los canales.",
+                        reply_markup=InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a Supertv", url=f"https://t.me/{CHANNELS['supertvw2'][1:]}"
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔗 Unirse a fullvvd", url=f"https://t.me/{CHANNELS['fullvvd'][1:]}"
+                                    )
+                                ],
+                                [InlineKeyboardButton("✅ Verificar suscripción", callback_data="verify")],
+                            ]
+                        ),
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"Error verificando canal: {e}")
+                await query.message.reply_text("❌ Error al verificar canales. Intenta más tarde.")
+                return
+
+        if can_view_video(user_id):
+            await register_view(user_id)
+            title_caption = pkg.get("caption", "🎬 Aquí tienes el video completo.")
+            await query.message.reply_video(
+                video=pkg["video_id"],
+                caption=title_caption,
+                protect_content=not is_premium(user_id)
+            )
+            # Eliminar el mensaje anterior (sinopsis y botón "Ver Video") si se desea una experiencia más limpia
+            await query.message.delete()
+        else:
+            await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
+            await query.message.reply_text(
+                f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
+                "💎 Por favor, considera comprar un plan para acceso ilimitado.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Comprar Planes", callback_data="planes")]]),
+            )
+
 
     # Modificado: Mostrar video capítulo con navegación (ahora directamente desde serie_cap_index)
     elif data.startswith("cap_"):
-        # formato cap_{serie_id}_{temporada_placeholder}_{indice}
-        # temporada_placeholder se usará como 0 para indicar que no hay temporadas intermedias
-        _, serie_id, _, index = data.split("_")
+        # formato cap_{serie_id}_{indice}
+        _, serie_id, index = data.split("_") # Ahora solo 3 partes
         index = int(index)
         serie = series_data.get(serie_id)
         
-        # Validación de serie y capítulos
         if not serie or "capitulos" not in serie:
             await query.message.reply_text("❌ Serie o capítulos no disponibles.")
             return
@@ -505,16 +582,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             botones = []
             if index > 0:
-                # El callback_data para anterior debe reflejar la nueva estructura directa
-                botones.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"cap_{serie_id}_0_{index - 1}"))
+                botones.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"cap_{serie_id}_{index - 1}"))
             if index < total - 1:
-                # El callback_data para siguiente debe reflejar la nueva estructura directa
-                botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_0_{index + 1}"))
-            # Botón para volver a la lista de capítulos de la serie (a la misma serie)
-            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_{serie_id}")) # Vuelve a cargar la info de la serie y botones de capitulos
+                botones.append(InlineKeyboardButton("➡️ Siguiente", callback_data=f"cap_{serie_id}_{index + 1}"))
+            botones.append(InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_{serie_id}"))
 
             markup = InlineKeyboardMarkup([botones])
 
+            # Edit the message to show the video
             await query.edit_message_media(
                 media=InputMediaVideo(
                     media=video_id,
@@ -525,7 +600,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
-            # Ofrecer comprar plan si el usuario ha excedido el límite
             await query.message.reply_text(
                 f"🚫 Has alcanzado tu límite diario de {FREE_LIMIT_VIDEOS} videos.\n"
                 "💎 Por favor, considera comprar un plan para acceso ilimitado.",
@@ -562,6 +636,8 @@ async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user_id = msg.from_user.id
+    bot_username = (await context.bot.get_me()).username
+
     if user_id not in current_photo:
         await msg.reply_text("❌ Primero envía una sinopsis con imagen.")
         return
@@ -580,12 +656,12 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_data()
 
-    # MODIFICADO: Botón "Ver Contenido"
-    boton = InlineKeyboardMarkup(
+    # MODIFICADO: Botón "Ver Contenido" que redirige al bot con la sinopsis y otro botón
+    boton_ver_contenido_en_privado = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "▶️ Ver Contenido", url=f"https://t.me/{(await context.bot.get_me()).username}?start=video_{pkg_id}"
+                    "▶️ Ver Contenido", url=f"https://t.me/{bot_username}?start=video_{pkg_id}"
                 )
             ]
         ]
@@ -596,7 +672,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 photo=photo_id,
                 caption=caption,
-                reply_markup=boton,
+                reply_markup=boton_ver_contenido_en_privado, # Usa el nuevo botón
                 protect_content=True,
             )
         except Exception as e:
@@ -618,17 +694,13 @@ async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "title": data["caption"].split("\n")[0],
         "photo_id": data["photo_id"],
         "caption": data["caption"],
-        "capitulos": [], # Directamente lista de capítulos
+        "capitulos": [],
     }
     del current_photo[user_id]
     await update.message.reply_text(
         "✅ Serie creada temporalmente.\n"
         "Ahora envía el primer video para el capítulo 1 usando /agregar_capitulo."
     )
-
-# REMOVIDO: Función agregar_temporada ya no es necesaria
-# async def agregar_temporada(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     # ... (ya no se usa) ...
 
 async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando para agregar capítulo a la serie actual."""
@@ -637,12 +709,9 @@ async def agregar_capitulo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ No hay serie en creación. Usa /crear_serie primero.")
         return
     
-    # La temporada ya no se especifica, se añaden directamente a la lista de capítulos
     await update.message.reply_text(
         "📽️ Por favor envía ahora el video para el capítulo de la serie."
     )
-    # No necesitamos guardar 'temporada_activa' ya que los capítulos se añaden directamente
-
 
 async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Para recibir video y asignarlo como capítulo si el usuario está en proceso de agregar capítulo a serie."""
@@ -659,7 +728,7 @@ async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     serie = current_series[user_id]
     video_id = msg.video.file_id
-    serie["capitulos"].append(video_id) # Añade directamente a la lista de capítulos
+    serie["capitulos"].append(video_id)
 
     await msg.reply_text(f"✅ Capítulo {len(serie['capitulos'])} agregado a la serie. Usa /finalizar_serie para guardar la serie o envía otro video para añadir el siguiente capítulo.")
 
@@ -672,7 +741,6 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     serie = current_series[user_id]
     serie_id = serie["serie_id"]
     
-    # Guardar en memoria global series_data (estructura simplificada)
     series_data[serie_id] = {
         "title": serie["title"],
         "photo_id": serie["photo_id"],
@@ -683,12 +751,13 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del current_series[user_id]
 
     # Enviar a grupos la portada con botón "Ver Serie"
+    bot_username = (await context.bot.get_me()).username
     boton = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
                     "▶️ Ver Serie",
-                    url=f"https://t.me/{(await context.bot.get_me()).username}?start=serie_{serie_id}",
+                    url=f"https://t.me/{bot_username}?start=serie_{serie_id}",
                 )
             ]
         ]
@@ -737,16 +806,17 @@ app_telegram = Application.builder().token(TOKEN).build()
 # Agregar handlers
 app_telegram.add_handler(CommandHandler("start", start))
 app_telegram.add_handler(CallbackQueryHandler(verify, pattern="^verify$"))
-app_telegram.add_handler(CallbackQueryHandler(handle_callback))
+# Modificado: El callback para "play_video_" se maneja aquí
+app_telegram.add_handler(CallbackQueryHandler(handle_callback, pattern="^play_video_.*$"))
+app_telegram.add_handler(CallbackQueryHandler(handle_callback)) # Otros callbacks genéricos
 app_telegram.add_handler(PreCheckoutQueryHandler(precheckout_handler))
 app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
-app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie)) # Mantiene este para series/videos
+app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
 app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.GROUPS, detectar_grupo))
 
-# NUEVOS comandos para series (ahora simplificados)
+# NUEVOS comandos para series
 app_telegram.add_handler(CommandHandler("crear_serie", crear_serie))
-# REMOVIDO: CommandHandler("agregar_temporada")
 app_telegram.add_handler(CommandHandler("agregar_capitulo", agregar_capitulo))
 app_telegram.add_handler(CommandHandler("finalizar_serie", finalizar_serie))
 
