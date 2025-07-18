@@ -182,14 +182,14 @@ PLAN_PRO_ITEM = {
     "description": "50 videos diarios, sin reenvíos ni compartir.",
     "payload": "plan_pro", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Pro por 30 días", 40)],
+    "prices": [LabeledPrice("Plan Pro por 30 días", 25)],
 }
 PLAN_ULTRA_ITEM = {
     "title": "Plan Ultra",
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 100)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 50)],
 }
 
 # --- Control acceso (MODIFICADO) ---
@@ -250,16 +250,18 @@ def get_main_menu():
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🎧 Audio Libros", callback_data="audio_libros"),
-                InlineKeyboardButton("📚 Libro PDF", callback_data="libro_pdf"),
+                InlineKeyboardButton("🎧 Audio Libros", url="https://t.me/+3lDaURwlx-g4NWJk"),
+                InlineKeyboardButton("📚 Libro PDF", url="https://t.me/+iJ5D1VLCAW5hYzhk"),
             ],
             [
-                InlineKeyboardButton("💬 Chat Pedido", callback_data="chat_pedido"),
-                InlineKeyboardButton("🎓 Cursos", callback_data="cursos"),
+                InlineKeyboardButton("💬 Chat Pedido", url="https://t.me/+6eA7AdRfgq81NzBh"),
+                InlineKeyboardButton("🎓 Cursos", url="https://t.me/clasesdigitales"),
             ],
             [
-                InlineKeyboardButton("📢 Canal", url="https://t.me/hsitotv"),
-                InlineKeyboardButton("👥 Grupo", url="https://t.me/udyat_channel"),
+                InlineKeyboardButton("📽️ peliculas", url="https://t.me/+dVTzx8dMGf81NTcx"),
+                ],
+            [
+                InlineKeyboardButton("🎬 series", url="https://t.me/+qiFtv2EmV-xmNWFh"),
             ],
             [
                 InlineKeyboardButton("💎 Planes", callback_data="planes"),
@@ -267,7 +269,7 @@ def get_main_menu():
             ],
             [
                 InlineKeyboardButton("ℹ️ Info", callback_data="info"),
-                InlineKeyboardButton("❓ Ayuda", callback_data="ayuda"),
+                InlineKeyboardButton("❓ soporte", url="https://t.me/Hsito"),
             ],
         ]
     )
@@ -363,7 +365,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 member = await context.bot.get_chat_member(chat_id=username, user_id=user_id)
                 if member.status not in ["member", "administrator", "creator"]:
                     await update.message.reply_text(
-                        "🔒 Para ver este contenido debes unirte a los canales.",
+                        "🔒 saludos debes unirte a todos nuestros canales para asi poder usar este bot una ves te hayas unido debes dar click en verificar suscripcion para con tinuar.",
                         reply_markup=InlineKeyboardMarkup(
                             [
                                 [
