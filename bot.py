@@ -507,12 +507,34 @@ async def main():
     application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
 
-    # Webhook si quieres (descomenta si usas webhook)
-    # application.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN,
-    #                        webhook_url=f"{APP_URL}/{TOKEN}")
+  
+async def main():
+    load_data()
+    logger.info("🤖 Bot iniciado con webhook")
 
-    # O polling para desarrollo/local
-    await application.run_polling()
+    # Inicializar la app de Telegram
+    await app_telegram.initialize()
+    await app_telegram.start()
+
+    # Iniciar el servidor aiohttp
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"🌐 Webhook corriendo en puerto {PORT}")
+
+    # Mantener la app corriendo
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("🛑 Deteniendo bot...")
+    finally:
+        await app_telegram.stop()
+        await app_telegram.shutdown()
+        await runner.cleanup()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+
