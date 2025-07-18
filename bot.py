@@ -3,7 +3,7 @@ import json
 import tempfile
 import logging
 import asyncio
-from datetime import datetime, timedelta, timezone # <-- ¡IMPORTANTE: Añadir timezone!
+from datetime import datetime, timedelta, timezone
 from aiohttp import web
 from telegram import (
     Update,
@@ -484,7 +484,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         # Add a "Volver" button to go back to the series overview
         botones.append([InlineKeyboardButton("🔙 Volver a la Serie", callback_data=f"serie_{serie_id}")])
-        await query.edit_message_text(f"📺 Capítulos de Temporada {temporada[1:]}:", reply_markup=InlineKeyboardMarkup(botones))
+
+        # *** CAMBIO AQUÍ: Usar edit_message_caption en lugar de edit_message_text ***
+        await query.edit_message_caption(
+            caption=f"📺 Capítulos de Temporada {temporada[1:]}:",
+            reply_markup=InlineKeyboardMarkup(botones)
+        )
 
     # NUEVO: Mostrar video capítulo con navegación
     elif data.startswith("cap_"):
