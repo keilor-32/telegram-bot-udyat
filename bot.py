@@ -786,7 +786,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Formato mejorado para clicable
     full_caption = (
         f"{caption}\n\n"
-        f"🎬 *Ver Contenido:👇*\n"
+        f"🎬 *haga click aqui:👇*\n"
         f"➡️ [ver contenido ]({direct_url})\n" # Enlace clicable
     )
 
@@ -880,7 +880,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Formato mejorado para clicable
     full_caption = (
         f"{serie['caption']}\n\n"
-        f"🎬 *Ver Serie Completa:👇*\n"
+        f"🎬 *haga click aqui:👇*\n"
         f"➡️ [ver contenido ]({direct_url})\n" # Enlace clicable
     )
 
