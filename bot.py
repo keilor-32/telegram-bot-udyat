@@ -787,7 +787,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_caption = (
         f"{caption}\n\n"
         f"🎬 *Ver Contenido:👇*\n"
-        f"➡️ [ver video completo ]({direct_url})\n" # Enlace clicable
+        f"➡️ [ver contenido ]({direct_url})\n" # Enlace clicable
     )
 
     for chat_id in known_chats:
@@ -881,7 +881,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_caption = (
         f"{serie['caption']}\n\n"
         f"🎬 *Ver Serie Completa:👇*\n"
-        f"➡️ [ver serie]({direct_url})\n" # Enlace clicable
+        f"➡️ [ver contenido ]({direct_url})\n" # Enlace clicable
     )
 
     for chat_id in known_chats:
