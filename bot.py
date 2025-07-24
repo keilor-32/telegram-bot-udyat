@@ -781,28 +781,29 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_data()
 
-    boton_ver_contenido_en_privado = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "▶️ Ver Contenido", url=f"https://t.me/{bot_username}?start=video_{pkg_id}"
-                )
-            ]
-        ]
+    direct_url = f"https://t.me/{bot_username}?start=video_{pkg_id}"
+    
+    # Formato mejorado para clicable y copiable
+    full_caption = (
+        f"{caption}\n\n"
+        f"🎬 *Ver video completo :👇👇*\n"
+        f"➡️ [ver contenido 🎥🎥]({direct_url})\n" # Enlace clicable
+        # Eliminado: f"`{direct_url}`" # URL copiable
     )
+
     for chat_id in known_chats:
         try:
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=photo_id,
-                caption=caption,
-                reply_markup=boton_ver_contenido_en_privado,
-                protect_content=True, # Siempre protege en el grupo
+                caption=full_caption,
+                parse_mode="Markdown",
+                protect_content=False, # MODIFICADO: Cambiado a False
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar a {chat_id}: {e}")
 
-    await msg.reply_text("✅ Contenido enviado a los grupos.")
+    await msg.reply_text("✅ Contenido enviado a los grupos con URL directa (clicable y copiable).")
 
 # --- Comandos para series (simplificado) ---
 async def crear_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -842,7 +843,7 @@ async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = update.message
     user_id = msg.from_user.id
     if user_id not in current_series:
-        # Si no está creando una serie, se trata como un video regular
+        # If not creating a series, treat it as a regular video
         await recibir_video(update, context)
         return
 
@@ -874,31 +875,30 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data()
     del current_series[user_id]
 
-    # Enviar a grupos la portada con botón "Ver Serie"
     bot_username = (await context.bot.get_me()).username
-    boton = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "▶️ Ver Serie",
-                    url=f"https://t.me/{bot_username}?start=serie_{serie_id}",
-                )
-            ]
-        ]
+    direct_url = f"https://t.me/{bot_username}?start=serie_{serie_id}"
+    
+    # Formato mejorado para clicable
+    full_caption = (
+        f"{serie['caption']}\n\n"
+        f"🎬 *Ver Serie Completa:👇👇*\n"
+        f"➡️ [ver serie 📽️📽️]({direct_url})\n" # Enlace clicable
+        # Eliminado: f"`{direct_url}`" # URL copiable
     )
+
     for chat_id in known_chats:
         try:
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=serie["photo_id"],
-                caption=serie["caption"],
-                reply_markup=boton,
-                protect_content=True, # Siempre protege la publicación en el grupo
+                caption=full_caption,
+                parse_mode="Markdown",
+                protect_content=False, # MODIFICADO: Cambiado a False
             )
         except Exception as e:
             logger.warning(f"No se pudo enviar serie a {chat_id}: {e}")
 
-    await update.message.reply_text("✅ Serie guardada y enviada a los grupos.")
+    await update.message.reply_text("✅ Serie guardada y enviada a los grupos con URL directa (clicable y copiable).")
 
 async def detectar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
