@@ -24,6 +24,7 @@ from telegram.ext import (
 )
 import firebase_admin
 from firebase_admin import credentials, firestore
+from concurrent.futures import ThreadPoolExecutor # IMPORTANTE: Nuevo import
 
 # --- Inicializar Firestore con variable de entorno JSON doblemente serializada ---
 google_credentials_raw = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -58,7 +59,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Variables en memoria ---
-# MODIFICADO: Ahora user_premium guarda un diccionario {expire_at: datetime, plan_type: str}
 user_premium = {}          # {user_id: {expire_at: datetime, plan_type: str}}
 user_daily_views = {}      # {user_id: {date: count}}
 content_packages = {}      # {pkg_id: {photo_id, caption, video_id}}
@@ -74,69 +74,79 @@ COLLECTION_VIEWS = "user_daily_views"
 COLLECTION_CHATS = "known_chats"
 COLLECTION_SERIES = "series_data"
 
-# --- Funciones Firestore (Síncronas) ---
-def save_user_premium_firestore():
+# --- ThreadPoolExecutor para operaciones bloqueantes de Firestore ---
+# Se utiliza para ejecutar las operaciones síncronas de Firestore en un hilo separado
+# para no bloquear el bucle de eventos de asyncio.
+executor = ThreadPoolExecutor(max_workers=5) # Puedes ajustar el número de workers
+
+async def run_blocking_in_executor(func, *args):
+    """Helper para ejecutar una función bloqueante en un hilo separado."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, func, *args)
+
+# --- Funciones Firestore (versiones síncronas que se ejecutarán en el executor) ---
+def save_user_premium_firestore_sync():
     batch = db.batch()
-    for uid, data in user_premium.items(): # MODIFICADO: 'data' ahora es un dict
+    for uid, data in user_premium.items():
         doc_ref = db.collection(COLLECTION_USERS).document(str(uid))
         exp = data["expire_at"]
         if exp.tzinfo is None:
-            batch.set(doc_ref, {"expire_at": exp.replace(tzinfo=timezone.utc).isoformat(), "plan_type": data["plan_type"]}) # MODIFICADO: Guardar plan_type
+            batch.set(doc_ref, {"expire_at": exp.replace(tzinfo=timezone.utc).isoformat(), "plan_type": data["plan_type"]})
         else:
-            batch.set(doc_ref, {"expire_at": exp.isoformat(), "plan_type": data["plan_type"]}) # MODIFICADO: Guardar plan_type
+            batch.set(doc_ref, {"expire_at": exp.isoformat(), "plan_type": data["plan_type"]})
     batch.commit()
 
-def load_user_premium_firestore():
+def load_user_premium_firestore_sync():
     docs = db.collection(COLLECTION_USERS).stream()
     result = {}
     for doc in docs:
         data = doc.to_dict()
         try:
             expire_at_str = data.get("expire_at")
-            plan_type = data.get("plan_type", "premium_legacy") # MODIFICADO: Cargar plan_type, default para compatibilidad
+            plan_type = data.get("plan_type", "premium_legacy")
             if expire_at_str:
                 expire_at = datetime.fromisoformat(expire_at_str)
                 if expire_at.tzinfo is None:
                     expire_at = expire_at.replace(tzinfo=timezone.utc)
-                result[int(doc.id)] = {"expire_at": expire_at, "plan_type": plan_type} # MODIFICADO: Guardar como dict
+                result[int(doc.id)] = {"expire_at": expire_at, "plan_type": plan_type}
         except Exception as e:
             logger.error(f"Error al cargar fecha premium para {doc.id}: {e}")
             pass
     return result
 
-def save_videos_firestore():
+def save_videos_firestore_sync():
     batch = db.batch()
     for pkg_id, content in content_packages.items():
         doc_ref = db.collection(COLLECTION_VIDEOS).document(pkg_id)
         batch.set(doc_ref, content)
     batch.commit()
 
-def load_videos_firestore():
+def load_videos_firestore_sync():
     docs = db.collection(COLLECTION_VIDEOS).stream()
     result = {}
     for doc in docs:
         result[doc.id] = doc.to_dict()
     return result
 
-def save_user_daily_views_firestore():
+def save_user_daily_views_firestore_sync():
     batch = db.batch()
     for uid, views in user_daily_views.items():
         doc_ref = db.collection(COLLECTION_VIEWS).document(uid)
         batch.set(doc_ref, views)
     batch.commit()
 
-def load_user_daily_views_firestore():
+def load_user_daily_views_firestore_sync():
     docs = db.collection(COLLECTION_VIEWS).stream()
     result = {}
     for doc in docs:
         result[doc.id] = doc.to_dict()
     return result
 
-def save_known_chats_firestore():
+def save_known_chats_firestore_sync():
     doc_ref = db.collection(COLLECTION_CHATS).document("chats")
     doc_ref.set({"chat_ids": list(known_chats)})
 
-def load_known_chats_firestore():
+def load_known_chats_firestore_sync():
     doc_ref = db.collection(COLLECTION_CHATS).document("chats")
     doc = doc_ref.get()
     if doc.exists:
@@ -144,35 +154,66 @@ def load_known_chats_firestore():
         return set(data.get("chat_ids", []))
     return set()
 
-def save_series_firestore():
+def save_series_firestore_sync():
     batch = db.batch()
     for serie_id, serie in series_data.items():
         doc_ref = db.collection(COLLECTION_SERIES).document(serie_id)
         batch.set(doc_ref, serie)
     batch.commit()
 
-def load_series_firestore():
+def load_series_firestore_sync():
     docs = db.collection(COLLECTION_SERIES).stream()
     result = {}
     for doc in docs:
         result[doc.id] = doc.to_dict()
     return result
 
-# --- Guardar y cargar todo ---
-def save_data():
-    save_user_premium_firestore()
-    save_videos_firestore()
-    save_user_daily_views_firestore()
-    save_known_chats_firestore()
-    save_series_firestore()
+# --- Funciones Firestore (versiones asíncronas) ---
+async def save_user_premium_firestore_async():
+    await run_blocking_in_executor(save_user_premium_firestore_sync)
 
-def load_data():
+async def load_user_premium_firestore_async():
+    return await run_blocking_in_executor(load_user_premium_firestore_sync)
+
+async def save_videos_firestore_async():
+    await run_blocking_in_executor(save_videos_firestore_sync)
+
+async def load_videos_firestore_async():
+    return await run_blocking_in_executor(load_videos_firestore_sync)
+
+async def save_user_daily_views_firestore_async():
+    await run_blocking_in_executor(save_user_daily_views_firestore_sync)
+
+async def load_user_daily_views_firestore_async():
+    return await run_blocking_in_executor(load_user_daily_views_firestore_sync)
+
+async def save_known_chats_firestore_async():
+    await run_blocking_in_executor(save_known_chats_firestore_sync)
+
+async def load_known_chats_firestore_async():
+    return await run_blocking_in_executor(load_known_chats_firestore_sync)
+
+async def save_series_firestore_async():
+    await run_blocking_in_executor(save_series_firestore_sync)
+
+async def load_series_firestore_async():
+    return await run_blocking_in_executor(load_series_firestore_sync)
+
+# --- Guardar y cargar todo (ahora son asíncronas) ---
+async def save_data():
+    await save_user_premium_firestore_async()
+    await save_videos_firestore_async()
+    await save_user_daily_views_firestore_async()
+    await save_known_chats_firestore_async()
+    await save_series_firestore_async()
+
+async def load_data():
     global user_premium, content_packages, user_daily_views, known_chats, series_data
-    user_premium = load_user_premium_firestore()
-    content_packages = load_videos_firestore()
-    user_daily_views = load_user_daily_views_firestore()
-    known_chats = load_known_chats_firestore()
-    series_data = load_series_firestore()
+    user_premium = await load_user_premium_firestore_async()
+    content_packages = await load_videos_firestore_async()
+    user_daily_views = await load_user_daily_views_firestore_async()
+    known_chats = await load_known_chats_firestore_async()
+    series_data = await load_series_firestore_async()
 
 # --- Planes ---
 FREE_LIMIT_VIDEOS = 3
@@ -237,7 +278,7 @@ async def register_view(user_id):
     if uid not in user_daily_views:
         user_daily_views[uid] = {}
     user_daily_views[uid][today] = user_daily_views[uid].get(today, 0) + 1
-    save_data()
+    await save_data() # <-- Actualizado a await
 
 # --- Canales para verificación ---
 CHANNELS = {
@@ -466,6 +507,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     else:
+        # Este es el mensaje de bienvenida inicial.
+        # Si había un anuncio de ETH aquí, se ha quitado.
         await update.message.reply_text(
             "👋 ¡Hola! primero debes unirte a todos nuestros canales para usar este bot una ves te hayas unido haz click en verificar suscripcion para continuar.",
             reply_markup=InlineKeyboardMarkup(
@@ -499,7 +542,7 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await query.answer() # Se responde a la query inmediatamente
     user = query.from_user
     user_id = user.id
     data = query.data
@@ -526,7 +569,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_pro":
         if is_premium(user_id):
-            exp_date = user_premium[user_id].get("expire_at", datetime.now(timezone.utc)).strftime("%Y-%m-%d") # MODIFICADO
+            exp_date = user_premium[user_id].get("expire_at", datetime.now(timezone.utc)).strftime("%Y-%m-%d")
             await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp_date}.")
             return
         await context.bot.send_invoice(
@@ -542,7 +585,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "comprar_ultra":
         if is_premium(user_id):
-            exp_date = user_premium[user_id].get("expire_at", datetime.now(timezone.utc)).strftime("%Y-%m-%d") # MODIFICADO
+            exp_date = user_premium[user_id].get("expire_at", datetime.now(timezone.utc)).strftime("%Y-%m-%d")
             await query.message.reply_text(f"✅ Ya tienes un plan activo hasta {exp_date}.")
             return
         await context.bot.send_invoice(
@@ -566,7 +609,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.reply_text(
             f"🧑 Perfil:\n• {user.full_name}\n• @{user.username or 'Sin usuario'}\n"
-            f"• ID: {user_id}\n• Plan: {plan_type.replace('plan_', '').capitalize()}\n• Expira: {exp_date_str}", # MODIFICADO: Mostrar tipo de plan
+            f"• ID: {user_id}\n• Plan: {plan_type.replace('plan_', '').capitalize()}\n• Expira: {exp_date_str}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="planes")]]),
         )
 
@@ -627,7 +670,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=title_caption,
                 protect_content=not can_resend_content(user_id)
             )
-            await query.message.delete() # Eliminar el mensaje anterior
+            # await query.message.delete() # Eliminar el mensaje anterior (opcional, cuidado con UX)
         else:
             await query.answer("🚫 Has alcanzado tu límite diario de videos. Compra un plan para más acceso.", show_alert=True)
             await query.message.reply_text(
@@ -726,7 +769,6 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     payload = update.message.successful_payment.invoice_payload
-    # MODIFICADO: Guardar el tipo de plan junto con la fecha de expiración
     if payload == PLAN_PRO_ITEM["payload"]:
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_pro"}
@@ -735,14 +777,8 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         expire_at = datetime.now(timezone.utc) + timedelta(days=30)
         user_premium[user_id] = {"expire_at": expire_at, "plan_type": "plan_ultra"}
         await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Ultra* se activó por 30 días.")
-    # Si tienes un 'PREMIUM_ITEM' original, asegúrate de manejarlo también.
-    # Ejemplo de manejo para el viejo "premium_plan" si aún lo usas:
-    # elif payload == PREMIUM_ITEM["payload"]:
-    #     expire_at = datetime.now(timezone.utc) + timedelta(days=30)
-    #     user_premium[user_id] = {"expire_at": expire_at, "plan_type": "premium_legacy"}
-    #     await update.message.reply_text("🎉 ¡Gracias por tu compra! Tu *Plan Premium* se activó por 30 días.")
     
-    save_data()
+    await save_data() # <-- Actualizado a await
 
 
 # --- Recepción contenido (sinopsis + video) ---
@@ -779,7 +815,7 @@ async def recibir_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     del current_photo[user_id]
 
-    save_data()
+    await save_data() # <-- Actualizado a await
 
     direct_url = f"https://t.me/{bot_username}?start=video_{pkg_id}"
     
@@ -843,7 +879,7 @@ async def recibir_video_serie(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = msg.from_user.id
     if user_id not in current_series:
         # If not creating a series, treat it as a regular video
-        await recibir_video(update, context)
+        await recibir_video(update, context) # <-- Llama a la función asíncrona
         return
 
     if not msg.video:
@@ -871,7 +907,7 @@ async def finalizar_serie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "caption": serie["caption"],
         "capitulos": serie["capitulos"],
     }
-    save_data()
+    await save_data() # <-- Actualizado a await
     del current_series[user_id]
 
     bot_username = (await context.bot.get_me()).username
@@ -905,7 +941,7 @@ async def detectar_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type in ["group", "supergroup"]:
         if chat.id not in known_chats:
             known_chats.add(chat.id)
-            save_data()
+            await save_data() # <-- Actualizado a await
             logger.info(f"Grupo registrado: {chat.id}")
             await update.message.reply_text(f"✅ ¡Este grupo ha sido registrado para envíos! ID: `{chat.id}`", parse_mode="Markdown")
     # Check for forwarded channel posts or bot added to channel
@@ -913,7 +949,7 @@ async def detectar_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_id = update.channel_post.chat.id
         if channel_id not in known_chats:
             known_chats.add(channel_id)
-            save_data()
+            await save_data() # <-- Actualizado a await
             logger.info(f"Canal registrado: {channel_id}")
             await context.bot.send_message(
                 chat_id=channel_id,
@@ -925,7 +961,7 @@ async def detectar_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_id = update.message.forward_from_chat.id
         if channel_id not in known_chats:
             known_chats.add(channel_id)
-            save_data()
+            await save_data() # <-- Actualizado a await
             logger.info(f"Canal registrado via forward: {channel_id}")
             await update.message.reply_text(f"✅ ¡Canal registrado exitosamente! ID: `{channel_id}`\n\n"
                                              "Asegúrate de que el bot sea administrador con permisos de 'Publicar mensajes' y 'Editar mensajes' en tu canal para que pueda enviar contenido automáticamente.",
@@ -964,7 +1000,7 @@ app_telegram.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_p
 app_telegram.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, recibir_foto))
 app_telegram.add_handler(MessageHandler(filters.VIDEO & filters.ChatType.PRIVATE, recibir_video_serie))
 # MODIFICADO: Usar la función detectar_chat para todos los tipos de chat
-app_telegram.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUPS | filters.ChatType.CHANNEL), detectar_chat)) # CORREGIDO: CHANNELS a CHANNEL
+app_telegram.add_handler(MessageHandler(filters.ALL & (filters.ChatType.GROUPS | filters.ChatType.CHANNEL), detectar_chat))
 app_telegram.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, detectar_chat)) # Handle forwarded messages in private chat
 
 # Comandos para series
@@ -980,7 +1016,7 @@ web_app.on_startup.append(on_startup)
 web_app.on_shutdown.append(on_shutdown)
 
 async def main():
-    load_data()
+    await load_data() # <-- Actualizado a await
     logger.info("🤖 Bot iniciado con webhook")
 
     await app_telegram.initialize()
@@ -1004,3 +1040,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
