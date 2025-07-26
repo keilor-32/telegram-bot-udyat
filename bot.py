@@ -175,21 +175,21 @@ def load_data():
     series_data = load_series_firestore()
 
 # --- Planes ---
-FREE_LIMIT_VIDEOS = 3
+FREE_LIMIT_VIDEOS = 2
 PRO_LIMIT_VIDEOS = 50
 PLAN_PRO_ITEM = {
     "title": "Plan Pro",
     "description": "50 videos diarios, sin reenvíos ni compartir.",
     "payload": "plan_pro", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Pro por 30 días", 25)],
+    "prices": [LabeledPrice("Plan Pro por 30 días", 5)],
 }
 PLAN_ULTRA_ITEM = {
     "title": "Plan Ultra",
     "description": "Videos y reenvíos ilimitados, sin restricciones.",
     "payload": "plan_ultra", # Usado como plan_type
     "currency": "XTR",
-    "prices": [LabeledPrice("Plan Ultra por 30 días", 50)],
+    "prices": [LabeledPrice("Plan Ultra por 30 días", 15)],
 }
 
 # --- Control acceso (MODIFICADO) ---
@@ -509,16 +509,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💎 *Planes disponibles:*\n\n"
             f"🔹 Free – Hasta {FREE_LIMIT_VIDEOS} videos por día.\n\n"
             "🔸 *Plan Pro*\n"
-            "Precio: 25 estrellas\n"
+            "Precio: 5 estrellas\n"
             "Beneficios: 50 videos diarios, sin reenvíos ni compartir.\n\n"
             "🔸 *Plan Ultra*\n"
-            "Precio: 50 estrellas\n"
+            "Precio: 15 estrellas\n"
             "Beneficios: Videos y reenvíos ilimitados, sin restricciones.\n"
         )
         botones_planes = InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("💸 Comprar Plan Pro (25 ⭐)", callback_data="comprar_pro")],
-                [InlineKeyboardButton("💸 Comprar Plan Ultra (50 ⭐)", callback_data="comprar_ultra")],
+                [InlineKeyboardButton("💸 Comprar Plan Pro (5 ⭐)", callback_data="comprar_pro")],
+                [InlineKeyboardButton("💸 Comprar Plan Ultra (15 ⭐)", callback_data="comprar_ultra")],
                 [InlineKeyboardButton("🔙 Volver", callback_data="menu_principal")],
             ]
         )
